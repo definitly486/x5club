@@ -33,11 +33,12 @@ class ReceiptsAdapter(
             r.amountPromo?.let { String.format("%.2f ₽", it) } ?: "—"
         }"
 
-        val products = r.items.joinToString("\n") { p ->
-            "• ${p.name ?: "?"} × ${p.quantity ?: "?"} = ${
-                p.priceItem?.let { String.format("%.2f ₽", it) } ?: "—"
-            }"
-        }
+       val products = r.items.joinToString("\n") { p ->
+    val price = p.priceItem ?: p.pricePromo ?: p.priceRegular
+    "• ${p.name ?: "?"} × ${p.quantity ?: "?"} = ${
+        price?.let { String.format("%.2f ₽", it) } ?: "—"
+    }"
+}
         holder.tvItems.text = products.ifBlank { "Нет товаров" }
     }
 

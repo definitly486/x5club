@@ -57,22 +57,23 @@ object CsvExporter {
                 val items = receipt.items.ifEmpty { listOf(null) }
 
                 for (item in items) {
-                    val row = listOf(
-                        receipt.created ?: "",
-                        shop,
-                        receipt.checkNum ?: "",
-                        receipt.fiscalNum ?: "",
-                        receipt.storeAddress ?: "",
-                        receipt.amountPromo?.toString() ?: "",
-                        receipt.amountRegular?.toString() ?: "",
-                        item?.pluId ?: "",
-                        item?.name ?: "",
-                        item?.quantity?.toString() ?: "",
-                        item?.weightUomCode ?: "",
-                        item?.priceRegular?.toString() ?: "",
-                        item?.pricePromo?.toString() ?: "",
-                        item?.priceItem?.toString() ?: ""
-                    )
+                   val itemPrice = item?.priceItem ?: item?.pricePromo ?: item?.priceRegular
+val row = listOf(
+    receipt.created ?: "",
+    shop,
+    receipt.checkNum ?: "",
+    receipt.fiscalNum ?: "",
+    receipt.storeAddress ?: "",
+    receipt.amountPromo?.toString() ?: "",
+    receipt.amountRegular?.toString() ?: "",
+    item?.pluId ?: "",
+    item?.name ?: "",
+    item?.quantity?.toString() ?: "",
+    item?.weightUomCode ?: "",
+    item?.priceRegular?.toString() ?: "",
+    item?.pricePromo?.toString() ?: "",
+    itemPrice?.toString() ?: ""
+)
                     append(row.joinToString(";") { escape(it) })
                     append("\n")
                 }
