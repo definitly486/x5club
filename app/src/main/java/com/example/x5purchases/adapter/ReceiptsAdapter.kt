@@ -3,6 +3,8 @@ package com.example.x5purchases.adapter
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.content.Intent
+import com.example.x5purchases.ReceiptDetailActivity
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.example.x5purchases.R
@@ -40,6 +42,14 @@ class ReceiptsAdapter(
     }"
 }
         holder.tvItems.text = products.ifBlank { "Нет товаров" }
+
+        // Открываем полный экран подробностей по нажатию на любую часть чека.
+        holder.itemView.setOnClickListener {
+            val context = holder.itemView.context
+            context.startActivity(Intent(context, ReceiptDetailActivity::class.java).apply {
+                putExtra(ReceiptDetailActivity.EXTRA_RECEIPT, r)
+            })
+        }
     }
 
     override fun getItemCount(): Int = items.size

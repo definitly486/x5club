@@ -13,7 +13,7 @@ data class Receipt(
     val storeAddress: String? = null,
     val ofdurl: String? = null,
     val items: List<Product> = emptyList()
-)
+) : java.io.Serializable
 
 data class Product(
     val pluId: String? = null,
@@ -23,4 +23,4 @@ data class Product(
     val priceRegular: Double? = null,
     val pricePromo: Double? = null,
     val priceItem: Double? = null
-)
+) : java.io.Serializable
