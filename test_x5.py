@@ -4,6 +4,7 @@
 import os
 import sys
 import json
+import csv
 import argparse
 import datetime
 from pathlib import Path
@@ -33,66 +34,173 @@ HEADERS = {
 
 
 # ---------------------------------------------------------
+# Таблицы
+# ---------------------------------------------------------
+
+def print_table(headers, rows):
+    """Выводит таблицу без сторонних библиотек."""
+
+    if not rows:
+        print("Нет данных для отображения.")
+        return
+
+    formatted_rows = []
+
+    for row in rows:
+        formatted_rows.append([
+            "—" if value is None or value == "" else str(value)
+            for value in row
+        ])
+
+    widths = []
+
+    for i, header in enumerate(headers):
+        width = len(str(header))
+
+        for row in formatted_rows:
+            width = max(width, len(row[i]))
+
+        widths.append(width)
+
+    separator = "+-" + "-+-".join(
+        "-" * width for width in widths
+    ) + "-+"
+
+    def print_row(row):
+        print(
+            "| "
+            + " | ".join(
+                str(value).ljust(widths[i])
+                for i, value in enumerate(row)
+            )
+            + " |"
+        )
+
+    print(separator)
+    print_row(headers)
+    print(separator)
+
+    for row in formatted_rows:
+        print_row(row)
+
+    print(separator)
+
+
+# ---------------------------------------------------------
 # Cookies
 # ---------------------------------------------------------
 
 def get_cookie(cookie_file):
-    """
-    Читает cookies.json, экспортированный из браузера.
+    cookie_header = os.environ.get("X5_COOKIE", "").strip()
 
-    Поддерживает формат:
-    {
-        "Request Cookies": {
-            "__visitor_id": "...",
-            "__keycloak_session": "...",
-            "__id_token_hint": "..."
-        }
-    }
-    """
-
-    env_cookie = os.environ.get("X5_COOKIE")
-
-    if env_cookie:
-        return env_cookie.strip()
+    if cookie_header:
+        print("Используются cookies из переменной X5_COOKIE.")
+        return cookie_header
 
     path = Path(cookie_file)
 
     if not path.exists():
-        raise FileNotFoundError(
-            f"Файл cookies не найден: {path}"
+        raise ValueError(
+            f"Файл {cookie_file} не найден."
         )
 
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    cookies = data.get("Request Cookies", data)
-
-    if isinstance(cookies, list):
-        result = []
-
-        for cookie in cookies:
-            name = cookie.get("name")
-            value = cookie.get("value")
-
-            if name and value is not None:
-                result.append(f"{name}={value}")
-
-        cookie_string = "; ".join(result)
-
-    elif isinstance(cookies, dict):
-        cookie_string = "; ".join(
-            f"{name}={value}"
-            for name, value in cookies.items()
-            if value is not None
+    try:
+        content = path.read_text(encoding="utf-8").strip()
+    except OSError as e:
+        raise ValueError(
+            f"Не удалось прочитать {cookie_file}: {e}"
         )
 
+    if not content:
+        raise ValueError(
+            f"Файл {cookie_file} не содержит куки (файл пуст)."
+        )
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Файл {cookie_file} содержит некорректный JSON: {e}"
+        )
+
+    cookies = None
+
+    if isinstance(data, dict):
+        cookies = data.get("Request Cookies")
+
+        if cookies is None:
+            cookies = data.get("cookies")
+
+        if cookies is None and data and all(
+            isinstance(v, str) for v in data.values()
+        ):
+            cookies = data
+
+    elif isinstance(data, list):
+        cookies = data
+
+    pairs = []
+    cookie_rows = []
+
+    if isinstance(cookies, dict):
+        for name, value in cookies.items():
+            valid = (
+                bool(name)
+                and value is not None
+                and bool(str(value).strip())
+            )
+
+            cookie_rows.append([
+                name,
+                "Есть" if valid else "Пусто"
+            ])
+
+            if valid:
+                pairs.append(f"{name}={value}")
+
+    elif isinstance(cookies, list):
+        for item in cookies:
+            if not isinstance(item, dict):
+                continue
+
+            name = item.get("name")
+            value = item.get("value")
+
+            valid = (
+                bool(name)
+                and value is not None
+                and bool(str(value).strip())
+            )
+
+            cookie_rows.append([
+                name or "Без имени",
+                "Есть" if valid else "Пусто"
+            ])
+
+            if valid:
+                pairs.append(f"{name}={value}")
+
+    if cookie_rows:
+        print("\nCookies из файла:")
+
+        print_table(
+            ["Имя cookie", "Состояние"],
+            cookie_rows
+        )
     else:
-        raise ValueError("Неизвестный формат cookies.json")
+        print("\nВ файле не обнаружены cookies.")
 
-    if not cookie_string:
-        raise ValueError("В cookies.json нет cookies")
+    cookie_header = "; ".join(pairs)
 
-    return cookie_string
+    if not cookie_header:
+        raise ValueError(
+            f"Файл {cookie_file} не содержит куки. "
+            "Экспортируй cookies из браузера заново."
+        )
+
+    print(f"\nЗагружено cookies: {len(pairs)}")
+
+    return cookie_header
 
 
 # ---------------------------------------------------------
@@ -153,7 +261,7 @@ def fetch_raw(session, date_from, date_to, page=None):
     raw = response.text.strip()
 
     if not raw:
-        raise RuntimeError("Сервер вернул пустой ответ")
+        raise RuntimeError("Сервер вернул пустой ответ.")
 
     if raw.startswith("<"):
         raise RuntimeError(
@@ -246,21 +354,19 @@ def decode_turbo_stream(raw):
 
     if not isinstance(decoded, dict):
         raise ValueError(
-            "Корневой элемент Turbo Stream не является объектом"
+            "Корневой элемент Turbo Stream не является объектом."
         )
 
     data = decoded.get("data")
 
     if not isinstance(data, dict):
         raise ValueError(
-            "В Turbo Stream отсутствует объект data"
+            "В Turbo Stream отсутствует объект data."
         )
 
-    # POST-ответ истории покупок.
     receipts = data.get("additionalReceiptsResponse")
 
     if receipts is None:
-        # Поддержка старого GET-ответа.
         routes = decoded.get("routes")
 
         if isinstance(routes, dict):
@@ -268,6 +374,7 @@ def decode_turbo_stream(raw):
             lk = auth.get("lk", {})
             history = lk.get("history", {})
             history_data = history.get("data", {})
+
             receipts_response = history_data.get(
                 "receiptsResponse", {}
             )
@@ -278,7 +385,7 @@ def decode_turbo_stream(raw):
     if receipts is None:
         raise ValueError(
             "Не найден additionalReceiptsResponse "
-            "или старый receiptsResponse"
+            "или старый receiptsResponse."
         )
 
     if isinstance(receipts, dict):
@@ -286,7 +393,7 @@ def decode_turbo_stream(raw):
 
     if not isinstance(receipts, list):
         raise ValueError(
-            "Ответ со списком чеков имеет неожиданный формат"
+            "Ответ со списком чеков имеет неожиданный формат."
         )
 
     return receipts
@@ -297,9 +404,7 @@ def decode_turbo_stream(raw):
 # ---------------------------------------------------------
 
 def find_items(receipt):
-    """
-    Находит список товаров в чеке.
-    """
+    """Находит список товаров в чеке."""
 
     for key in (
         "items",
@@ -317,9 +422,7 @@ def find_items(receipt):
 
 
 def extract_receipts(raw):
-    """
-    Извлекает чеки и товары из ответа сервера.
-    """
+    """Извлекает чеки и товары из ответа сервера."""
 
     decoded = decode_turbo_stream(raw)
 
@@ -329,8 +432,6 @@ def extract_receipts(raw):
         if not isinstance(receipt, dict):
             continue
 
-        # Иногда объект чека может находиться
-        # внутри дополнительной обёртки.
         if "receipt" in receipt and isinstance(
             receipt["receipt"], dict
         ):
@@ -390,9 +491,7 @@ def extract_receipts(raw):
 # ---------------------------------------------------------
 
 def receipt_key(receipt):
-    """
-    Уникальный ключ чека.
-    """
+    """Уникальный ключ чека."""
 
     return (
         receipt.get("rtlTxnId"),
@@ -415,59 +514,228 @@ def format_money(value):
         return str(value)
 
 
+def get_shop_name(receipt):
+    return receipt.get("nameTc") or receipt.get("title") or "—"
+
+
+# ---------------------------------------------------------
+# Receipt table
+# ---------------------------------------------------------
+
 def print_receipts(receipts):
     print()
     print("=" * 70)
-    print(f"Найдено чеков: {len(receipts)}")
+    print(f"НАЙДЕНО ЧЕКОВ: {len(receipts)}")
     print("=" * 70)
 
+    rows = []
+
     for index, receipt in enumerate(receipts, 1):
-        print()
-        print(
-            f"[{index}] "
-            f"{receipt.get('created', 'Дата неизвестна')}"
-        )
+        rows.append([
+            index,
+            receipt.get("created"),
+            get_shop_name(receipt),
+            format_money(receipt.get("amountPromo")),
+            receipt.get("checkNum"),
+            len(receipt.get("items", [])),
+        ])
 
-        print(
-            f"Магазин: {receipt.get('nameTc') or '—'}"
-        )
+    print_table(
+        [
+            "№",
+            "Дата",
+            "Магазин",
+            "Сумма",
+            "№ чека",
+            "Товаров",
+        ],
+        rows,
+    )
 
-        print(
-            f"Адрес: {receipt.get('storeAddress') or '—'}"
-        )
+    total = 0.0
 
-        print(
-            f"Сумма: {format_money(receipt.get('amountPromo'))}"
-        )
+    for receipt in receipts:
+        try:
+            total += float(receipt.get("amountPromo") or 0)
+        except (ValueError, TypeError):
+            pass
 
-        if receipt.get("amountRegular") is not None:
-            print(
-                "Без скидки: "
-                f"{format_money(receipt.get('amountRegular'))}"
+    print(f"\nОбщая сумма покупок: {format_money(total)}")
+
+
+# ---------------------------------------------------------
+# Products table
+# ---------------------------------------------------------
+
+def print_items(receipts):
+    rows = []
+    number = 0
+
+    for receipt in receipts:
+        for item in receipt.get("items", []):
+            number += 1
+
+            rows.append([
+                number,
+                receipt.get("created"),
+                get_shop_name(receipt),
+                receipt.get("checkNum"),
+                item.get("name"),
+                item.get("quantity"),
+                item.get("weightUomCode"),
+                format_money(item.get("priceRegular")),
+                format_money(item.get("pricePromo")),
+                format_money(item.get("priceItem")),
+            ])
+
+    print("\n" + "=" * 70)
+    print(f"ТОВАРЫ В ЧЕКАХ: {number}")
+    print("=" * 70)
+
+    print_table(
+        [
+            "№",
+            "Дата",
+            "Магазин",
+            "Чек",
+            "Товар",
+            "Кол-во",
+            "Ед.",
+            "Обычная цена",
+            "Цена со скидкой",
+            "Сумма",
+        ],
+        rows,
+    )
+
+
+# ---------------------------------------------------------
+# CSV export
+# ---------------------------------------------------------
+
+def export_csv(receipts, filename):
+    """
+    Экспортирует покупки в CSV.
+
+    Одна строка CSV = один товар.
+    Информация о чеке повторяется для каждого товара.
+    """
+
+    columns = [
+        "Дата",
+        "Магазин",
+        "Номер чека",
+        "Фискальный номер",
+        "Фискальный признак",
+        "Адрес магазина",
+        "Сумма чека",
+        "Сумма без скидки",
+        "ОФД",
+        "PLU",
+        "Название товара",
+        "Количество",
+        "Единица измерения",
+        "Обычная цена",
+        "Цена со скидкой",
+        "Сумма товара",
+    ]
+
+    count = 0
+
+    try:
+        with open(
+            filename,
+            "w",
+            encoding="utf-8-sig",
+            newline="",
+        ) as f:
+
+            writer = csv.DictWriter(
+                f,
+                fieldnames=columns,
+                delimiter=";",
+                extrasaction="ignore",
             )
 
-        print(f"Номер чека: {receipt.get('checkNum') or '—'}")
+            writer.writeheader()
 
-        if receipt.get("fiscalNum"):
-            print(f"Фискальный номер: {receipt['fiscalNum']}")
+            for receipt in receipts:
+                items = receipt.get("items") or []
 
-        if receipt.get("ofdurl"):
-            print(f"ОФД: {receipt['ofdurl']}")
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
 
-        items = receipt.get("items", [])
+                    writer.writerow({
+                        "Дата": receipt.get("created", ""),
+                        "Магазин": get_shop_name(receipt),
+                        "Номер чека": receipt.get("checkNum", ""),
+                        "Фискальный номер": receipt.get("fiscalNum", ""),
+                        "Фискальный признак": receipt.get("fiscalSignNum", ""),
+                        "Адрес магазина": receipt.get("storeAddress", ""),
+                        "Сумма чека": receipt.get("amountPromo", ""),
+                        "Сумма без скидки": receipt.get("amountRegular", ""),
+                        "ОФД": receipt.get("ofdurl", ""),
+                        "PLU": item.get("pluId", ""),
+                        "Название товара": item.get("name", ""),
+                        "Количество": item.get("quantity", ""),
+                        "Единица измерения": item.get("weightUomCode", ""),
+                        "Обычная цена": item.get("priceRegular", ""),
+                        "Цена со скидкой": item.get("pricePromo", ""),
+                        "Сумма товара": item.get("priceItem", ""),
+                    })
 
-        print(f"Товаров: {len(items)}")
+                    count += 1
 
-        for item in items:
-            name = item.get("name") or "Без названия"
-            quantity = item.get("quantity")
-            price = item.get("priceItem")
+    except OSError as e:
+        raise RuntimeError(
+            f"Не удалось сохранить CSV {filename}: {e}"
+        )
 
-            print(
-                f"  - {name}: "
-                f"{quantity if quantity is not None else '—'} "
-                f"x {format_money(price)}"
-            )
+    print(f"\nCSV сохранён → {filename}")
+    print(f"Экспортировано товаров: {count}")
+    print(f"Чеков в экспорте: {len(receipts)}")
+
+
+# ---------------------------------------------------------
+# JSON export
+# ---------------------------------------------------------
+
+def save_json(receipts, filename="receipts.json"):
+    try:
+        Path(filename).write_text(
+            json.dumps(
+                receipts,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        raise RuntimeError(
+            f"Не удалось сохранить JSON {filename}: {e}"
+        )
+
+    print(f"\nJSON сохранён → {filename}")
+
+
+# ---------------------------------------------------------
+# Raw response dump
+# ---------------------------------------------------------
+
+def save_raw(raw, page):
+    filename = (
+        "response.raw.txt"
+        if page == 1
+        else f"response.page{page}.raw.txt"
+    )
+
+    Path(filename).write_text(
+        raw,
+        encoding="utf-8",
+    )
+
+    print(f"Сырой ответ → {filename}")
 
 
 # ---------------------------------------------------------
@@ -476,7 +744,57 @@ def print_receipts(receipts):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Загрузка истории покупок X5 Club"
+        description="Загрузка истории покупок X5 Club.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Примеры использования:
+
+  Последние 30 дней:
+    python3 test_x5.py
+
+  История за январь:
+    python3 test_x5.py --from 2026-01-01 --to 2026-01-31
+
+  История за весь 2026 год:
+    python3 test_x5.py --from 2026-01-01 --to 2026-12-31
+
+  История с сохранением сырых ответов:
+    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --dump
+
+  Экспорт покупок в CSV:
+    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --csv
+
+  CSV с собственным именем:
+    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --csv purchases_2026.csv
+
+  Сохранить JSON:
+    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --json
+
+  JSON и CSV одновременно:
+    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --json --csv
+
+  Сырые ответы, JSON и CSV:
+    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --dump --csv
+
+  Использовать другой файл cookies:
+    python3 test_x5.py --cookie-file my_cookies.json
+
+Параметры:
+
+  --from       Начальная дата YYYY-MM-DD
+  --to         Конечная дата YYYY-MM-DD
+  --days       Количество последних дней (по умолчанию 30)
+  --cookie-file Файл cookies (по умолчанию cookies.json)
+  --json       Вывести результат в JSON
+  --dump       Сохранить сырые ответы и receipts.json
+  --csv        Экспортировать покупки в CSV
+               Если имя не указано, используется purchases.csv
+
+Формат CSV:
+  Кодировка UTF-8 с BOM.
+  Разделитель столбцов: точка с запятой.
+  Одна строка соответствует одному товару.
+"""
     )
 
     parser.add_argument(
@@ -495,57 +813,99 @@ def main():
         "--days",
         type=int,
         default=30,
-        help="Количество дней, если даты не указаны (по умолчанию 30)",
+        help="Количество последних дней (по умолчанию 30)",
     )
 
     parser.add_argument(
         "--cookie-file",
         default="cookies.json",
-        help="Файл cookies.json",
+        help="Файл с cookies (по умолчанию cookies.json)",
     )
 
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Вывести результат в JSON",
+        help="Вывести чеки в формате JSON",
     )
 
     parser.add_argument(
         "--dump",
         action="store_true",
-        help="Сохранить сырые ответы сервера",
+        help="Сохранить сырые ответы сервера и receipts.json",
+    )
+
+    parser.add_argument(
+        "--csv",
+        nargs="?",
+        const="purchases.csv",
+        default=None,
+        metavar="FILE",
+        help="Экспорт покупок в CSV (по умолчанию purchases.csv)",
     )
 
     args = parser.parse_args()
 
+    # -----------------------------------------------------
+    # Проверка дат
+    # -----------------------------------------------------
+
     today = datetime.date.today()
 
-    date_to = (
-        datetime.date.fromisoformat(args.date_to)
-        if args.date_to
-        else today
-    )
+    try:
+        date_to = (
+            datetime.date.fromisoformat(args.date_to)
+            if args.date_to
+            else today
+        )
 
-    date_from = (
-        datetime.date.fromisoformat(args.date_from)
-        if args.date_from
-        else date_to - datetime.timedelta(days=args.days - 1)
-    )
+        date_from = (
+            datetime.date.fromisoformat(args.date_from)
+            if args.date_from
+            else date_to - datetime.timedelta(days=args.days - 1)
+        )
+
+    except ValueError as e:
+        parser.error(
+            f"Некорректная дата: {e}. "
+            "Используй формат YYYY-MM-DD."
+        )
+
+    if args.days < 1:
+        parser.error("--days должен быть больше нуля.")
 
     if date_from > date_to:
-        parser.error("Начальная дата больше конечной")
+        parser.error(
+            "Начальная дата не может быть позже конечной."
+        )
 
     date_from_str = date_from.isoformat()
     date_to_str = date_to.isoformat()
 
+    print("=" * 60)
+    print("X5 CLUB — ИСТОРИЯ ПОКУПОК")
+    print("=" * 60)
     print(f"Период: {date_from_str} → {date_to_str}")
-    print("Подключение к X5 Club...")
+    print(f"Файл cookies: {args.cookie_file}")
+
+    # -----------------------------------------------------
+    # Cookies
+    # -----------------------------------------------------
+
+    print("\nПодключение к X5 Club...")
 
     try:
         cookie = get_cookie(args.cookie_file)
+
     except Exception as e:
-        print(f"Ошибка cookies: {e}", file=sys.stderr)
+        print(
+            f"\nОшибка cookies: {e}",
+            file=sys.stderr,
+        )
         sys.exit(1)
+
+    # -----------------------------------------------------
+    # HTTP session
+    # -----------------------------------------------------
 
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -554,11 +914,15 @@ def main():
     all_receipts = []
     seen = set()
 
-    print("Запрашиваю историю...")
+    # -----------------------------------------------------
+    # Pagination
+    # -----------------------------------------------------
+
+    print("\nЗапрашиваю историю...")
 
     try:
         for page in range(1, 101):
-            print(f"Загружаю страницу {page}...")
+            print(f"\nЗагружаю страницу {page}...")
 
             raw = fetch_raw(
                 session,
@@ -568,18 +932,7 @@ def main():
             )
 
             if args.dump:
-                filename = (
-                    "response.raw.txt"
-                    if page == 1
-                    else f"response.page{page}.raw.txt"
-                )
-
-                Path(filename).write_text(
-                    raw,
-                    encoding="utf-8",
-                )
-
-                print(f"Сырой ответ → {filename}")
+                save_raw(raw, page)
 
             receipts = extract_receipts(raw)
 
@@ -613,22 +966,33 @@ def main():
                 break
 
         else:
-            print(
-                "Достигнут лимит в 100 страниц."
-            )
+            print("Достигнут лимит в 100 страниц.")
 
     except requests.RequestException as e:
-        print(f"Ошибка HTTP: {e}", file=sys.stderr)
+        print(f"\nОшибка HTTP: {e}", file=sys.stderr)
         sys.exit(1)
 
     except Exception as e:
-        print(f"Ошибка: {e}", file=sys.stderr)
+        print(f"\nОшибка: {e}", file=sys.stderr)
         sys.exit(1)
+
+    finally:
+        session.close()
+
+    # -----------------------------------------------------
+    # Sorting
+    # -----------------------------------------------------
 
     all_receipts.sort(
         key=lambda x: str(x.get("created") or ""),
         reverse=True,
     )
+
+    print("\nПолучение истории завершено.")
+
+    # -----------------------------------------------------
+    # Output
+    # -----------------------------------------------------
 
     if args.json:
         print(
@@ -640,20 +1004,45 @@ def main():
         )
     else:
         print_receipts(all_receipts)
+        print_items(all_receipts)
+
+    # -----------------------------------------------------
+    # JSON save
+    # -----------------------------------------------------
 
     if args.dump:
-        Path("receipts.json").write_text(
-            json.dumps(
-                all_receipts,
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        try:
+            save_json(all_receipts)
+        except RuntimeError as e:
+            print(f"Ошибка сохранения: {e}", file=sys.stderr)
 
-        print("\nJSON сохранён → receipts.json")
+    # -----------------------------------------------------
+    # CSV export
+    # -----------------------------------------------------
 
-    session.close()
+    if args.csv:
+        try:
+            export_csv(all_receipts, args.csv)
+        except RuntimeError as e:
+            print(f"Ошибка CSV: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # -----------------------------------------------------
+    # Summary
+    # -----------------------------------------------------
+
+    total_items = sum(
+        len(receipt.get("items", []))
+        for receipt in all_receipts
+    )
+
+    print("\n" + "=" * 60)
+    print("ИТОГО")
+    print("=" * 60)
+    print(f"Чеков: {len(all_receipts)}")
+    print(f"Товаров: {total_items}")
+
+    print("\nГотово.")
 
 
 if __name__ == "__main__":
