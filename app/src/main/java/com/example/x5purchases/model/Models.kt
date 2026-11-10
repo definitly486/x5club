@@ -9,7 +9,9 @@ data class Receipt(
     val amountRegular: Double? = null,
     val checkNum: String? = null,
     val fiscalNum: String? = null,
+    val fiscalSignNum: String? = null,
     val storeAddress: String? = null,
+    val ofdurl: String? = null,
     val items: List<Product> = emptyList()
 )
 

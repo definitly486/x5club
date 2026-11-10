@@ -5,10 +5,31 @@ import com.example.x5purchases.model.Receipt
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** Decodes the Remix Turbo Stream response used by x5club.ru. */
 object TurboStreamDecoder {
 
+    private fun asDouble(value: Any?): Double? = when (value) {
+        is Number -> value.toDouble()
+        is String -> value.trim()
+            .replace("\u00A0", "")
+            .replace(" ", "")
+            .replace(',', '.')
+            .toDoubleOrNull()
+        else -> null
+    }
+
+    private fun asString(value: Any?): String? = when (value) {
+        null, JSONObject.NULL -> null
+        else -> value.toString()
+    }
+
     fun decode(raw: String): List<Receipt> {
-        val table = JSONArray(raw)
+        val table = try {
+            JSONArray(raw)
+        } catch (e: Exception) {
+            throw IllegalStateException("Не удалось разобрать ответ X5 Turbo Stream: ${e.message}", e)
+        }
+
         val cache = mutableMapOf<Int, Any?>()
         val resolving = mutableSetOf<Int>()
 
@@ -16,27 +37,21 @@ object TurboStreamDecoder {
             if (ref !is Int) return ref
             if (ref < 0 || ref >= table.length()) return ref
             if (ref in cache) return cache[ref]
-            if (ref in resolving) return null
+            if (!resolving.add(ref)) return null
 
-            resolving.add(ref)
             val value = table.get(ref)
-
             val result: Any? = when (value) {
-                is JSONArray -> {
-                    List(value.length()) { i -> resolve(value.get(i)) }
-                }
+                is JSONArray -> List(value.length()) { i -> resolve(value.get(i)) }
                 is JSONObject -> {
                     val map = mutableMapOf<String, Any?>()
                     val keys = value.keys()
                     while (keys.hasNext()) {
                         val key = keys.next()
                         val child = value.get(key)
-                        if (key.startsWith("_") && key.drop(1).all { it.isDigit() }) {
+                        if (key.startsWith("_") && key.drop(1).isNotEmpty() && key.drop(1).all { it.isDigit() }) {
                             val idx = key.drop(1).toInt()
-                            val propName = if (idx < table.length()) table.get(idx) else key
-                            if (propName is String) {
-                                map[propName] = resolve(child)
-                            }
+                            val propertyName = if (idx < table.length()) table.get(idx) else key
+                            if (propertyName is String) map[propertyName] = resolve(child)
                         } else {
                             map[key] = resolve(child)
                         }
@@ -52,12 +67,11 @@ object TurboStreamDecoder {
         }
 
         val decoded = resolve(0) as? Map<*, *>
-            ?: throw IllegalStateException("Root is not object")
+            ?: throw IllegalStateException("Корневой элемент Turbo Stream не является объектом")
         val data = decoded["data"] as? Map<*, *>
-            ?: throw IllegalStateException("No data object")
+            ?: throw IllegalStateException("В ответе Turbo Stream отсутствует объект data")
 
         var receipts: Any? = data["additionalReceiptsResponse"]
-
         if (receipts == null) {
             val routes = decoded["routes"] as? Map<*, *>
             val auth = routes?.get("_auth") as? Map<*, *>
@@ -68,47 +82,50 @@ object TurboStreamDecoder {
             receipts = receiptsResponse?.get("data")
         }
 
-        val list: List<*> = when (receipts) {
+        val receiptList: List<*> = when (receipts) {
             is Map<*, *> -> receipts.values.toList()
             is List<*> -> receipts
             else -> emptyList<Any>()
         }
 
-        return list.mapNotNull { item ->
+        return receiptList.mapNotNull { item ->
             val receiptMap = (item as? Map<*, *>)?.get("receipt") as? Map<*, *>
                 ?: item as? Map<*, *>
                 ?: return@mapNotNull null
 
             if (!receiptMap.containsKey("rtlTxnId") &&
                 !receiptMap.containsKey("checkNum") &&
+                !receiptMap.containsKey("fiscalNum") &&
                 !receiptMap.containsKey("created")
             ) return@mapNotNull null
 
             val itemsRaw = listOf("items", "positions", "receiptItems", "products", "goods")
                 .firstNotNullOfOrNull { key -> receiptMap[key] as? List<*> }
 
-            val products = itemsRaw?.mapNotNull { it as? Map<*, *> }?.map { p ->
+            val products = itemsRaw.orEmpty().mapNotNull { it as? Map<*, *> }.map { product ->
                 Product(
-                    pluId = p["pluId"]?.toString(),
-                    name = p["name"]?.toString(),
-                    quantity = (p["quantity"] as? Number)?.toDouble(),
-                    weightUomCode = p["weightUomCode"]?.toString(),
-                    priceRegular = (p["priceRegular"] as? Number)?.toDouble(),
-                    pricePromo = (p["pricePromo"] as? Number)?.toDouble(),
-                    priceItem = (p["priceItem"] as? Number)?.toDouble()
+                    pluId = asString(product["pluId"]),
+                    name = asString(product["name"]),
+                    quantity = asDouble(product["quantity"]),
+                    weightUomCode = asString(product["weightUomCode"]),
+                    priceRegular = asDouble(product["priceRegular"]),
+                    pricePromo = asDouble(product["pricePromo"]),
+                    priceItem = asDouble(product["priceItem"])
                 )
-            } ?: emptyList()
+            }
 
             Receipt(
-                rtlTxnId = receiptMap["rtlTxnId"]?.toString(),
-                created = receiptMap["created"]?.toString(),
-                title = receiptMap["title"]?.toString(),
-                nameTc = receiptMap["nameTc"]?.toString(),
-                amountPromo = (receiptMap["amountPromo"] as? Number)?.toDouble(),
-                amountRegular = (receiptMap["amountRegular"] as? Number)?.toDouble(),
-                checkNum = receiptMap["checkNum"]?.toString(),
-                fiscalNum = receiptMap["fiscalNum"]?.toString(),
-                storeAddress = receiptMap["storeAddress"]?.toString(),
+                rtlTxnId = asString(receiptMap["rtlTxnId"]),
+                created = asString(receiptMap["created"]),
+                title = asString(receiptMap["title"]),
+                nameTc = asString(receiptMap["nameTc"]),
+                amountPromo = asDouble(receiptMap["amountPromo"]),
+                amountRegular = asDouble(receiptMap["amountRegular"]),
+                checkNum = asString(receiptMap["checkNum"]),
+                fiscalNum = asString(receiptMap["fiscalNum"]),
+                fiscalSignNum = asString(receiptMap["fiscalSignNum"]),
+                storeAddress = asString(receiptMap["storeAddress"]),
+                ofdurl = asString(receiptMap["ofdurl"]),
                 items = products
             )
         }
