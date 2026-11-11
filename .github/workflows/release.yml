@@ -1,4 +1,4 @@
-name: Build and Publish Android Release
+name: Build Android Release
 
 on:
   workflow_dispatch:
@@ -19,6 +19,7 @@ jobs:
   release:
     name: Build, sign and publish Release APK
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -35,6 +36,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
