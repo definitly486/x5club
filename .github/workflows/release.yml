@@ -1,0 +1,136 @@
+name: Build and Publish Android Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_name:
+        description: "Название сборки (необязательно)"
+        required: false
+        default: "x5club-release"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: x5club-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Build, sign and publish Release APK
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Validate signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Missing required GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Decode release keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYSTORE_PATH="$RUNNER_TEMP/x5club-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH"
+          echo "KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Build Release APK
+        run: ./gradlew --no-daemon clean :app:assembleRelease
+
+      - name: Sign Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_DIR="app/build/outputs/apk/release"
+          mapfile -t APKS < <(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' ! -name '*-signed.apk' | sort)
+
+          if [[ ${#APKS[@]} -eq 0 ]]; then
+            echo "::error::Release APK not found in $APK_DIR"
+            exit 1
+          fi
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          ZIPALIGN="$(find "$SDK_ROOT/build-tools" -type f -name zipalign | sort -V | tail -n 1)"
+
+          if [[ -z "$APKSIGNER" || -z "$ZIPALIGN" ]]; then
+            echo "::error::Android build-tools (apksigner/zipalign) not found"
+            exit 1
+          fi
+
+          mkdir -p artifacts
+          for apk in "${APKS[@]}"; do
+            base="$(basename "$apk" .apk)"
+            aligned="artifacts/${base}-aligned.apk"
+            signed="artifacts/${base}-signed.apk"
+
+            "$ZIPALIGN" -f -p 4 "$apk" "$aligned"
+            "$APKSIGNER" sign \
+              --ks "$KEYSTORE_PATH" \
+              --ks-key-alias "$ANDROID_KEY_ALIAS" \
+              --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+              --key-pass env:ANDROID_KEY_PASSWORD \
+              --out "$signed" \
+              "$aligned"
+
+            "$APKSIGNER" verify --verbose "$signed"
+            rm -f "$aligned"
+          done
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.build_name || 'x5club-release' }}-${{ github.run_number }}
+          path: artifacts/*-signed.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_NAME: ${{ inputs.build_name || 'x5club-release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="x5club-build-${GITHUB_RUN_NUMBER}"
+          TITLE="${BUILD_NAME} #${GITHUB_RUN_NUMBER}"
+
+          gh release create "$TAG" artifacts/*-signed.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes "Автоматическая Release-сборка Android APK.
+
+          Commit: ${GITHUB_SHA}
+          Branch/ref: ${GITHUB_REF_NAME}
+          Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
