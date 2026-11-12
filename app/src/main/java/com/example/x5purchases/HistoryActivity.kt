@@ -38,7 +38,7 @@ class HistoryActivity : AppCompatActivity() {
     private var currentReceipts: List<Receipt> = emptyList()
     private var cookies: String = ""
     private var isLoading = false
-    private var ignoreInitialPeriodSelection = true
+    private var selectedPeriodPosition = 1
 
     // Соответствует string-array period_labels
     private val periodDays = intArrayOf(7, 30, 60, 90, 180)
@@ -87,10 +87,12 @@ class HistoryActivity : AppCompatActivity() {
                 position: Int,
                 id: Long
             ) {
-                if (ignoreInitialPeriodSelection) {
-                    ignoreInitialPeriodSelection = false
-                    return
-                }
+                // Начальное событие Spinner не должно перезаписывать
+                // диапазон, выбранный через календарь. Реакция только
+                // на фактическое изменение выбранного пункта.
+                if (position == selectedPeriodPosition) return
+
+                selectedPeriodPosition = position
                 if (!isLoading) {
                     loadHistory(periodDays[position])
                 }
