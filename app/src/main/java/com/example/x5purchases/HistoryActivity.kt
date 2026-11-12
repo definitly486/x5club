@@ -1,5 +1,6 @@
 package com.example.x5purchases
 
+import android.app.DatePickerDialog
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
@@ -21,12 +22,16 @@ import com.google.android.material.button.MaterialButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class HistoryActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
     private lateinit var recycler: RecyclerView
     private lateinit var spinnerPeriod: Spinner
+    private lateinit var btnDateRange: MaterialButton
     private lateinit var btnExportCsv: MaterialButton
     private lateinit var btnLogout: MaterialButton
 
@@ -44,6 +49,7 @@ class HistoryActivity : AppCompatActivity() {
         tvStatus = findViewById(R.id.tvStatus)
         recycler = findViewById(R.id.recycler)
         spinnerPeriod = findViewById(R.id.spinnerPeriod)
+        btnDateRange = findViewById(R.id.btnDateRange)
         btnExportCsv = findViewById(R.id.btnExportCsv)
         btnLogout = findViewById(R.id.btnLogout)
 
@@ -89,6 +95,10 @@ class HistoryActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
+        btnDateRange.setOnClickListener {
+            if (!isLoading) showStartDatePicker()
+        }
+
         btnExportCsv.setOnClickListener {
             if (currentReceipts.isEmpty()) {
                 Toast.makeText(this, R.string.export_empty, Toast.LENGTH_SHORT).show()
@@ -107,24 +117,83 @@ class HistoryActivity : AppCompatActivity() {
         }
     }
 
+    private fun showStartDatePicker() {
+        val today = LocalDate.now()
+        val initialDate = today.minusDays(29)
+
+        DatePickerDialog(
+            this,
+            { _, year, month, day ->
+                val dateFrom = LocalDate.of(year, month + 1, day)
+                showEndDatePicker(dateFrom, today)
+            },
+            initialDate.year,
+            initialDate.monthValue - 1,
+            initialDate.dayOfMonth
+        ).apply {
+            datePicker.maxDate = today.toEpochMillis()
+            setTitle("Выберите начальную дату")
+            show()
+        }
+    }
+
+    private fun showEndDatePicker(dateFrom: LocalDate, today: LocalDate) {
+        DatePickerDialog(
+            this,
+            { _, year, month, day ->
+                val dateTo = LocalDate.of(year, month + 1, day)
+                if (dateTo.isBefore(dateFrom)) {
+                    Toast.makeText(
+                        this,
+                        "Конечная дата не может быть раньше начальной",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return@DatePickerDialog
+                }
+                loadHistory(dateFrom, dateTo)
+            },
+            today.year,
+            today.monthValue - 1,
+            today.dayOfMonth
+        ).apply {
+            datePicker.minDate = dateFrom.toEpochMillis()
+            datePicker.maxDate = today.toEpochMillis()
+            setTitle("Выберите конечную дату")
+            show()
+        }
+    }
+
+    private fun LocalDate.toEpochMillis(): Long =
+        atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
     private fun loadHistory(days: Int) {
+        val dateTo = LocalDate.now()
+        val dateFrom = dateTo.minusDays((days - 1).toLong())
+        loadHistory(dateFrom, dateTo, "за $days дн.")
+    }
+
+    private fun loadHistory(
+        dateFrom: LocalDate,
+        dateTo: LocalDate,
+        periodDescription: String = "за выбранный период"
+    ) {
         if (isLoading) return
         isLoading = true
 
         btnExportCsv.isEnabled = false
         currentReceipts = emptyList()
         recycler.adapter = null
-        tvStatus.text = "Загружаю историю за $days дн…"
+        tvStatus.text = "Загружаю историю $periodDescription…"
 
         lifecycleScope.launch {
             try {
                 val receipts = withContext(Dispatchers.IO) {
-                    X5Api.fetchReceipts(cookies, days = days)
+                    X5Api.fetchReceipts(cookies, dateFrom, dateTo)
                 }
                 currentReceipts = receipts
 
                 if (receipts.isEmpty()) {
-                    tvStatus.text = "Чеков не найдено за $days дн."
+                    tvStatus.text = "Чеков не найдено $periodDescription"
                 } else {
                     val total = receipts.sumOf { it.amountPromo ?: 0.0 }
                     val itemsCount = receipts.sumOf { it.items.size }
