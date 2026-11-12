@@ -421,8 +421,58 @@ def find_items(receipt):
     return []
 
 
+def normalize_payments(receipt):
+    """Извлекает способы оплаты из массива payments."""
+
+    payments = receipt.get("payments")
+    if not isinstance(payments, list):
+        return []
+
+    result = []
+
+    for payment in payments:
+        if not isinstance(payment, dict):
+            continue
+
+        result.append({
+            "code": payment.get("code"),
+            "name": payment.get("name"),
+            "value": payment.get("value"),
+            "bin": payment.get("bin"),
+            "fps": payment.get("fps"),
+        })
+
+    return result
+
+
+def format_payment(payments):
+    """Формирует читаемое описание способов оплаты."""
+
+    if not payments:
+        return "—"
+
+    descriptions = []
+
+    for payment in payments:
+        name = payment.get("name") or "Способ оплаты не указан"
+        card = payment.get("bin")
+        value = payment.get("value")
+
+        description = str(name)
+
+        if card:
+            description += f" ({card})"
+
+        if value not in (None, ""):
+            description += f", {format_money(value)}"
+
+        descriptions.append(description)
+
+    return "; ".join(descriptions)
+
+
 def extract_receipts(raw):
-    """Извлекает чеки и товары из ответа сервера."""
+    """Извлекает чеки, способы оплаты и товары из ответа сервера."""
 
     decoded = decode_turbo_stream(raw)
 
@@ -466,6 +516,8 @@ def extract_receipts(raw):
                 "priceItem": item.get("priceItem"),
             })
 
+        normalized_payments = normalize_payments(receipt)
+
         normalized = {
             "rtlTxnId": receipt.get("rtlTxnId"),
             "created": receipt.get("created"),
@@ -478,6 +530,8 @@ def extract_receipts(raw):
             "fiscalSignNum": receipt.get("fiscalSignNum"),
             "storeAddress": receipt.get("storeAddress"),
             "ofdurl": receipt.get("ofdurl"),
+            "payments": normalized_payments,
+            "paymentMethod": format_payment(normalized_payments),
             "items": normalized_items,
         }
 
@@ -536,6 +590,7 @@ def print_receipts(receipts):
             receipt.get("created"),
             get_shop_name(receipt),
             format_money(receipt.get("amountPromo")),
+            receipt.get("paymentMethod") or "—",
             receipt.get("checkNum"),
             len(receipt.get("items", [])),
         ])
@@ -546,6 +601,7 @@ def print_receipts(receipts):
             "Дата",
             "Магазин",
             "Сумма",
+            "Способ оплаты",
             "№ чека",
             "Товаров",
         ],
@@ -630,6 +686,7 @@ def export_csv(receipts, filename):
         "Адрес магазина",
         "Сумма чека",
         "Сумма без скидки",
+        "Способ оплаты",
         "ОФД",
         "PLU",
         "Название товара",
@@ -675,6 +732,7 @@ def export_csv(receipts, filename):
                         "Адрес магазина": receipt.get("storeAddress", ""),
                         "Сумма чека": receipt.get("amountPromo", ""),
                         "Сумма без скидки": receipt.get("amountRegular", ""),
+                        "Способ оплаты": receipt.get("paymentMethod", ""),
                         "ОФД": receipt.get("ofdurl", ""),
                         "PLU": item.get("pluId", ""),
                         "Название товара": item.get("name", ""),
