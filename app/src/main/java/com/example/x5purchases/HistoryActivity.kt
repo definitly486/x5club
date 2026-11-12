@@ -41,7 +41,7 @@ class HistoryActivity : AppCompatActivity() {
     private var selectedPeriodPosition = 1
 
     // Соответствует string-array period_labels
-    private val periodDays = intArrayOf(7, 30, 60, 90, 180)
+    private val periodDays = intArrayOf(7, 30, 60, 90, 180, 365)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
