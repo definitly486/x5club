@@ -95,7 +95,7 @@ object X5Api {
                 }
 
                 val pageReceipts = TurboStreamDecoder.decode(raw)
-                if (pageReceipts.isEmpty()) return allReceipts.sortedByDescending { it.created }
+                if (pageReceipts.isEmpty()) return allReceipts.sortedByCreatedDesc()
 
                 var added = 0
                 for (receipt in pageReceipts) {
@@ -106,10 +106,17 @@ object X5Api {
                     }
                 }
 
-                if (added == 0) return allReceipts.sortedByDescending { it.created }
+                if (added == 0) return allReceipts.sortedByCreatedDesc()
             }
         }
 
-        return allReceipts.sortedByDescending { it.created }
+        return allReceipts.sortedByCreatedDesc()
     }
+
+    // Сортировка по реальному времени чека, а не по строке даты.
+    // Сортировка стабильная: чеки с нераспознанной датой уходят в конец
+    // и сохраняют порядок сервера.
+    private fun List<Receipt>.sortedByCreatedDesc(): List<Receipt> =
+        sortedByDescending { ReceiptDate.toEpochMillis(it.created) ?: Long.MIN_VALUE }
+
 }
