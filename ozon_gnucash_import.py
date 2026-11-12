@@ -261,6 +261,80 @@ def fill_existing_transaction(receipt, existing, mapped):
         raise ValueError(f"После заполнения проводка не сбалансирована: {total} RUB")
     return txn
 
+
+def receipt_date(value):
+    """Возвращает дату чека YYYY-MM-DD без сдвига календарного дня."""
+    if value is None:
+        raise ValueError("У чека отсутствует дата created.")
+    text = str(value).strip()
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", text)
+    if match:
+        return match.group(1)
+    for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    raise ValueError(f"Не удалось распознать дату чека: {text}")
+
+
+def receipt_payment_method(receipt):
+    """Возвращает только явно указанную маску способа оплаты."""
+    value = receipt.get("paymentMethod")
+    if isinstance(value, dict):
+        value = value.get("maskedPan") or value.get("cardNumber") or value.get("value")
+    return str(value or "").strip()
+
+
+def create_receipt_transaction(root, receipt, bank, mapped):
+    """Создаёт завершённую RUB-транзакцию: расходы по товарам и списание с Ozon."""
+    amount_total = cents(receipt.get("amountPromo", 0))
+    items_total = sum(
+        cents(item.get("pricePromo", item.get("priceRegular", "0")))
+        for item, _account in mapped
+    )
+    if amount_total <= 0 or items_total != amount_total:
+        raise ValueError(
+            f"Чек №{receipt.get('checkNum')}: сумма товаров "
+            f"{Decimal(items_total) / 100:.2f} не равна сумме чека "
+            f"{Decimal(amount_total) / 100:.2f} RUB."
+        )
+
+    book = root.find("gnc:book", NS)
+    if book is None:
+        raise ValueError("В файле GnuCash не найден элемент book.")
+
+    txn = ET.SubElement(book, q("gnc", "transaction"), {"version": "2.0.0"})
+    make_text(txn, "trn", "id", guid(), {"type": "guid"})
+    currency = ET.SubElement(txn, q("trn", "currency"))
+    make_text(currency, "cmdty", "space", "CURRENCY")
+    make_text(currency, "cmdty", "id", "RUB")
+
+    posted = ET.SubElement(txn, q("trn", "date-posted"))
+    make_text(posted, "ts", "date", f"{receipt_date(receipt.get('created'))} 12:00:00 +0000")
+    entered = ET.SubElement(txn, q("trn", "date-entered"))
+    make_text(entered, "ts", "date", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S +0000"))
+
+    check_num = receipt.get("checkNum")
+    description = f"Пятёрочка — чек №{check_num} (X5 Club)"
+    make_text(txn, "trn", "description", description)
+    splits = ET.SubElement(txn, q("trn", "splits"))
+
+    for item, account in mapped:
+        value = cents(item.get("pricePromo", item.get("priceRegular", "0")))
+        add_split(splits, account["id"], value, item.get("name", ""))
+
+    add_split(splits, bank["id"], -amount_total)
+
+    total = sum(
+        (parse_fraction(sp.findtext("split:value", default="0/1", namespaces=NS))
+         for sp in splits.findall("trn:split", NS)),
+        Decimal("0"),
+    )
+    if total != 0:
+        raise ValueError(f"Новая транзакция не сбалансирована: {total} RUB.")
+    return txn
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -270,6 +344,9 @@ class App:
         self.json_path = tk.StringVar()
         self.status = tk.StringVar(value="Выберите файл GnuCash и файл с чеками.")
         self.analysis = None
+        self.ozon_enabled = tk.BooleanVar(value=True)
+        self.psb_enabled = tk.BooleanVar(value=False)
+        self.sber_enabled = tk.BooleanVar(value=False)
         self.build_ui()
 
     def build_ui(self):
@@ -281,9 +358,14 @@ class App:
         ttk.Label(outer, text="Файл чеков JSON:").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Entry(outer, textvariable=self.json_path).grid(row=1, column=1, sticky="ew", padx=6)
         ttk.Button(outer, text="Обзор…", command=self.pick_json).grid(row=1, column=2)
-        ttk.Button(outer, text="Проверить и найти чек", command=self.analyze).grid(row=2, column=0, columnspan=3, sticky="ew", pady=10)
+        cards = ttk.LabelFrame(outer, text="Способы оплаты", padding=6)
+        cards.grid(row=2, column=0, columnspan=3, sticky="ew", pady=6)
+        ttk.Checkbutton(cards, text="Карта Озон", variable=self.ozon_enabled).pack(side="left", padx=8)
+        ttk.Checkbutton(cards, text="Карта ПСБ", variable=self.psb_enabled, state="disabled").pack(side="left", padx=8)
+        ttk.Checkbutton(cards, text="Карта Сбербанка", variable=self.sber_enabled, state="disabled").pack(side="left", padx=8)
+        ttk.Button(outer, text="Проверить и найти чеки", command=self.analyze).grid(row=3, column=0, columnspan=3, sticky="ew", pady=8)
         self.info = tk.Text(outer, height=8, wrap="word")
-        self.info.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=5)
+        self.info.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
         cols = ("item", "account", "amount")
         self.table = ttk.Treeview(outer, columns=cols, show="headings", height=14)
         self.table.heading("item", text="Товар из чека")
@@ -292,13 +374,13 @@ class App:
         self.table.column("item", width=470)
         self.table.column("account", width=300)
         self.table.column("amount", width=120, anchor="e")
-        self.table.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
-        ttk.Label(outer, textvariable=self.status).grid(row=5, column=0, columnspan=3, sticky="w", pady=6)
+        self.table.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=5)
+        ttk.Label(outer, textvariable=self.status).grid(row=6, column=0, columnspan=3, sticky="w", pady=6)
         self.save_btn = ttk.Button(outer, text="Создать проводки и сохранить GnuCash", command=self.save, state="disabled")
-        self.save_btn.grid(row=6, column=0, columnspan=3, sticky="ew", pady=8)
+        self.save_btn.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
         outer.columnconfigure(1, weight=1)
-        outer.rowconfigure(3, weight=0)
-        outer.rowconfigure(4, weight=1)
+        outer.rowconfigure(4, weight=0)
+        outer.rowconfigure(5, weight=1)
 
     def pick_gnucash(self):
         p = filedialog.askopenfilename(title="Выберите файл GnuCash", filetypes=[("GnuCash", "*.gnucash *.gnc"), ("Все файлы", "*")])
@@ -321,90 +403,121 @@ class App:
         self.save_btn.config(state="disabled")
         self.analysis = None
         try:
+            if not self.ozon_enabled.get():
+                raise ValueError("Для импорта чеков необходимо включить «Карта Озон».")
             root, compressed = read_gnucash(self.gnucash_path.get())
             receipts = load_receipts(self.json_path.get())
             accounts = account_data(root)
-
             bank = find_account_by_path(
                 accounts, "Root Account:Активы:Текущие активы:ozon банк"
             )
-            discrepancy = find_account_by_path(
-                accounts, "Root Account:Дисбаланс-RUB"
-            )
-            pending = find_pending_transactions(root, discrepancy["id"], bank["id"])
-            balance = sum((Decimal(x["amount_cents"]) / 100 for x in pending), Decimal("0"))
-
             parent = find_product_parent(accounts)
             children = product_accounts(accounts, parent["id"])
-            self.log(f"Автоматически загружено категорий-алиасов: {len(children)}")
-            self.log("Категории: " + (", ".join(sorted(a["name"] for a in children)) or "нет"))
             self.log(f"Банковский счёт: {bank['path']}")
-            self.log(f"Счёт дисбаланса: {discrepancy['path']}")
-            self.log(f"Сумма незаполненных проводок Ozon: {balance:.2f} RUB")
-            self.log(f"Найдено исходных проводок для заполнения: {len(pending)}")
             self.log(f"Счёт товаров: {parent['path']}")
+            self.log(f"Категорий для сопоставления: {len(children)}")
 
-            matches = []
-            for receipt in receipts:
+            selected = [r for r in receipts
+                        if receipt_payment_method(r) == "************7961"]
+            without_method = sum(1 for r in receipts if not receipt_payment_method(r))
+            self.log(f"Всего чеков в JSON: {len(receipts)}")
+            self.log(f"Чеков с картой Озон ************7961: {len(selected)}")
+            if without_method:
+                self.log(f"Чеков без paymentMethod: {without_method} (они пропущены)")
+            if not selected:
+                self.log("Подходящих чеков нет. Проверьте, что JSON содержит paymentMethod.")
+                self.status.set("Нет чеков с точной маской карты Ozon. GnuCash не изменён.")
+                return
+
+            known_ids = transaction_check_ids(root)
+            existing_bank = {}
+            for txn in root.findall(".//gnc:transaction", NS):
+                date_text = txn.findtext("trn:date-posted/ts:date", default="", namespaces=NS)[:10]
+                for split in txn.findall("trn:splits/trn:split", NS):
+                    if split.findtext("split:account", default="", namespaces=NS) != bank["id"]:
+                        continue
+                    value = parse_fraction(split.findtext("split:value", default="0/1", namespaces=NS))
+                    if value < 0:
+                        key = (date_text, abs(int((value * 100).to_integral_value())))
+                        existing_bank.setdefault(key, []).append(txn)
+
+            pending = find_pending_transactions(
+                root,
+                find_account_by_path(accounts, "Root Account:Дисбаланс-RUB")["id"],
+                bank["id"],
+            )
+            plans = []
+            skipped = 0
+            for receipt in selected:
+                check_num = str(receipt.get("checkNum", "")).strip()
+                if not check_num:
+                    self.log("Пропущен чек без checkNum.")
+                    skipped += 1
+                    continue
+                if check_num in known_ids:
+                    skipped += 1
+                    continue
+
                 amount = cents(receipt.get("amountPromo", 0))
-                for entry in pending:
-                    if entry["amount_cents"] == amount:
-                        matches.append((receipt, entry))
+                day = receipt_date(receipt.get("created"))
+                if amount <= 0:
+                    self.log(f"Чек №{check_num}: некорректная сумма.")
+                    skipped += 1
+                    continue
 
-            if not matches:
-                self.log("Не найден чек с суммой, совпадающей с незаполненной проводкой Ozon Банка.")
-                self.log("Суммы исходных проводок: " + (", ".join(f"{Decimal(x['amount_cents'])/100:.2f}" for x in pending) or "нет"))
-                self.log("Суммы чеков JSON: " + ", ".join(
-                    f"{money(r.get('amountPromo', 0)):.2f} (чек {r.get('checkNum')})" for r in receipts
-                ))
-                self.status.set("Совпадение не найдено. GnuCash не изменён.")
-                return
-            if len(matches) > 1:
-                self.log("Найдено несколько совпадений по сумме; автоматическая запись запрещена:")
-                for r, e in matches:
-                    self.log(f"  чек №{r.get('checkNum')} / проводка {e['date']} / {money(r['amountPromo']):.2f}")
-                self.status.set("Неоднозначное совпадение. Ничего не записано.")
-                return
-
-            receipt, entry = matches[0]
-            mapped = []
-            missing = []
-            sum_items = 0
-            for item in receipt.get("items", []):
-                amount = cents(item.get("pricePromo", item.get("priceRegular", "0")))
-                sum_items += amount
-                account = map_item(item, children)
-                if account is None:
-                    missing.append(item.get("name", "(без названия)"))
+                # Если в GnuCash уже есть банковское списание на ту же дату и сумму,
+                # не создаём дубль. Незаполненную проводку разрешаем заполнить.
+                same_day = [e for e in pending
+                            if e["amount_cents"] == amount and e["date"] == day]
+                if len(same_day) > 1:
+                    self.log(f"Чек №{check_num}: несколько незаполненных проводок на эту дату/сумму — пропуск.")
+                    skipped += 1
+                    continue
+                if same_day:
+                    action = "fill"
+                    entry = same_day[0]
+                elif existing_bank.get((day, amount)):
+                    self.log(f"Чек №{check_num}: списание {day} на {money(amount / 100):.2f} RUB уже есть — пропуск.")
+                    skipped += 1
+                    continue
                 else:
-                    mapped.append((item, account))
-                    self.table.insert("", "end", values=(
-                        item.get("name", ""), account["name"], f"{Decimal(amount)/100:.2f}"
-                    ))
+                    action = "create"
+                    entry = None
 
-            self.log(f"Выбран чек №{receipt.get('checkNum')} от {receipt.get('created')}")
-            self.log(f"Сумма чека: {money(receipt.get('amountPromo')):.2f} RUB")
-            self.log(f"Исходная банковская проводка: {entry['date']} — {money(Decimal(entry['amount_cents'])/100):.2f} RUB")
-            self.log("Будет изменена именно эта проводка: split Ozon Банка останется на месте, split дисбаланса заменится товарами.")
+                mapped, missing, items_total = [], [], 0
+                for item in receipt.get("items", []):
+                    item_amount = cents(item.get("pricePromo", item.get("priceRegular", "0")))
+                    items_total += item_amount
+                    account = map_item(item, children)
+                    if account is None:
+                        missing.append(item.get("name", "(без названия)"))
+                    else:
+                        mapped.append((item, account))
+                        self.table.insert("", "end", values=(
+                            f"Чек №{check_num}: {item.get('name', '')}",
+                            account["name"],
+                            f"{Decimal(item_amount) / 100:.2f}",
+                        ))
+                if missing:
+                    self.log(f"Чек №{check_num}: не сопоставлены товары: {', '.join(missing)}")
+                    skipped += 1
+                    continue
+                if items_total != amount:
+                    self.log(
+                        f"Чек №{check_num}: сумма товаров {Decimal(items_total)/100:.2f} "
+                        f"не равна сумме чека {Decimal(amount)/100:.2f} RUB."
+                    )
+                    skipped += 1
+                    continue
+                plans.append({"receipt": receipt, "mapped": mapped, "action": action, "entry": entry})
 
-            if missing:
-                self.log("Не удалось сопоставить товары:")
-                for name in missing:
-                    self.log("  • " + name)
-                self.status.set("Есть несопоставленные товары. Ничего не записано.")
+            self.log(f"Готово к импорту: {len(plans)}; пропущено/уже учтено: {skipped}")
+            self.log("Новые операции будут созданы как сбалансированные RUB-проводки: товары в расходы, списание с Ozon.")
+            if not plans:
+                self.status.set("Новых чеков для импорта нет. GnuCash не изменён.")
                 return
-            if sum_items != cents(receipt.get("amountPromo", 0)):
-                self.log(f"ОШИБКА: сумма товаров {Decimal(sum_items)/100:.2f} не равна сумме чека.")
-                self.status.set("Контрольная сумма не сошлась. Ничего не записано.")
-                return
-            if sum_items != entry["amount_cents"]:
-                self.log("ОШИБКА: сумма товаров не равна сумме исходной банковской проводки.")
-                self.status.set("Суммы не совпадают. Ничего не записано.")
-                return
-
-            self.analysis = (root, compressed, receipt, entry, mapped)
-            self.log("Все проверки пройдены. Новая транзакция создаваться НЕ будет.")
-            self.status.set("Готово к заполнению существующей проводки Ozon Банка.")
+            self.analysis = (root, compressed, plans)
+            self.status.set(f"Проверка завершена: подготовлено чеков к импорту — {len(plans)}.")
             self.save_btn.config(state="normal")
         except Exception as exc:
             messagebox.showerror("Ошибка проверки", str(exc))
@@ -413,20 +526,31 @@ class App:
     def save(self):
         if not self.analysis:
             return
-        root, compressed, receipt, entry, mapped = self.analysis
+        root, compressed, plans = self.analysis
+        count_new = sum(1 for p in plans if p["action"] == "create")
+        count_fill = len(plans) - count_new
         prompt = (
-            f"Заполнить существующую проводку Ozon Банка для чека №{receipt.get('checkNum')} "
-            f"на сумму {money(receipt['amountPromo']):.2f} RUB?\n\n"
-            "Новая транзакция создаваться не будет.\n"
-            "Положительный split «Дисбаланс-RUB» будет заменён товарными расходами.\n"
-            "Отрицательный split счёта Ozon Банка, дата и GUID исходной проводки сохранятся.\n\n"
+            f"Импортировать чеков: {len(plans)}\\n"
+            f"Новых операций: {count_new}\\n"
+            f"Заполнить существующих незавершённых: {count_fill}\\n\\n"
+            "Новые операции будут записаны в RUB со списанием с «ozon банк» "
+            "и товарными расходами по категориям.\\n"
+            "ПСБ и Сбербанк не изменяются.\\n\\n"
             "Перед сохранением будет создана резервная копия .bak."
         )
-        if not messagebox.askyesno("Подтверждение заполнения", prompt):
+        if not messagebox.askyesno("Подтверждение импорта", prompt):
             return
         src = Path(self.gnucash_path.get())
         try:
-            fill_existing_transaction(receipt, entry, mapped)
+            bank = find_account_by_path(
+                account_data(root), "Root Account:Активы:Текущие активы:ozon банк"
+            )
+            for plan in plans:
+                if plan["action"] == "fill":
+                    fill_existing_transaction(plan["receipt"], plan["entry"], plan["mapped"])
+                else:
+                    create_receipt_transaction(root, plan["receipt"], bank, plan["mapped"])
+
             backup = Path(str(src) + ".bak")
             if not backup.exists():
                 shutil.copy2(src, backup)
@@ -447,12 +571,17 @@ class App:
             finally:
                 if os.path.exists(temp_name):
                     os.unlink(temp_name)
-            self.status.set(f"Готово: заполнена исходная проводка чека №{receipt.get('checkNum')}.")
+            self.status.set(f"Готово: импортировано чеков — {len(plans)}.")
             self.save_btn.config(state="disabled")
-            messagebox.showinfo("Готово", f"Заполнена существующая проводка Ozon Банка для чека №{receipt.get('checkNum')}.\nРезервная копия: {backup}")
+            messagebox.showinfo(
+                "Готово",
+                f"Импортировано чеков: {len(plans)}\\nНовых операций: {count_new}\\n"
+                f"Заполнено незавершённых: {count_fill}\\nРезервная копия: {backup}"
+            )
         except Exception as exc:
             messagebox.showerror("Ошибка записи", str(exc))
             self.status.set("Не удалось сохранить. Проверьте резервную копию и файл.")
+
 
 def main():
     root = tk.Tk()
