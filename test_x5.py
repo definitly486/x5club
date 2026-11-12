@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 
 import os
@@ -10,7 +9,6 @@ import datetime
 from pathlib import Path
 
 import requests
-
 
 BASE_URL = "https://x5club.ru/lk/history.data"
 
@@ -31,7 +29,6 @@ HEADERS = {
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
 }
-
 
 # ---------------------------------------------------------
 # Таблицы
@@ -68,12 +65,10 @@ def print_table(headers, rows):
 
     def print_row(row):
         print(
-            "| "
-            + " | ".join(
+            "| " + " | ".join(
                 str(value).ljust(widths[i])
                 for i, value in enumerate(row)
-            )
-            + " |"
+            ) + " |"
         )
 
     print(separator)
@@ -84,7 +79,6 @@ def print_table(headers, rows):
         print_row(row)
 
     print(separator)
-
 
 # ---------------------------------------------------------
 # Cookies
@@ -202,7 +196,6 @@ def get_cookie(cookie_file):
 
     return cookie_header
 
-
 # ---------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------
@@ -270,7 +263,6 @@ def fetch_raw(session, date_from, date_to, page=None):
         )
 
     return raw
-
 
 # ---------------------------------------------------------
 # Turbo Stream decoder
@@ -398,7 +390,6 @@ def decode_turbo_stream(raw):
 
     return receipts
 
-
 # ---------------------------------------------------------
 # Receipt extraction
 # ---------------------------------------------------------
@@ -420,59 +411,8 @@ def find_items(receipt):
 
     return []
 
-
-def normalize_payments(receipt):
-    """Извлекает способы оплаты из массива payments."""
-
-    payments = receipt.get("payments")
-    if not isinstance(payments, list):
-        return []
-
-    result = []
-
-    for payment in payments:
-        if not isinstance(payment, dict):
-            continue
-
-        result.append({
-            "code": payment.get("code"),
-            "name": payment.get("name"),
-            "value": payment.get("value"),
-            "bin": payment.get("bin"),
-            "fps": payment.get("fps"),
-        })
-
-    return result
-
-
-def format_payment(payments):
-    """Формирует читаемое описание способов оплаты."""
-
-    if not payments:
-        return "—"
-
-    descriptions = []
-
-    for payment in payments:
-        name = payment.get("name") or "Способ оплаты не указан"
-        card = payment.get("bin")
-        value = payment.get("value")
-
-        description = str(name)
-
-        if card:
-            description += f" ({card})"
-
-        if value not in (None, ""):
-            description += f", {format_money(value)}"
-
-        descriptions.append(description)
-
-    return "; ".join(descriptions)
-
-
 def extract_receipts(raw):
-    """Извлекает чеки, способы оплаты и товары из ответа сервера."""
+    """Извлекает чеки и товары из ответа сервера."""
 
     decoded = decode_turbo_stream(raw)
 
@@ -516,8 +456,6 @@ def extract_receipts(raw):
                 "priceItem": item.get("priceItem"),
             })
 
-        normalized_payments = normalize_payments(receipt)
-
         normalized = {
             "rtlTxnId": receipt.get("rtlTxnId"),
             "created": receipt.get("created"),
@@ -530,15 +468,12 @@ def extract_receipts(raw):
             "fiscalSignNum": receipt.get("fiscalSignNum"),
             "storeAddress": receipt.get("storeAddress"),
             "ofdurl": receipt.get("ofdurl"),
-            "payments": normalized_payments,
-            "paymentMethod": format_payment(normalized_payments),
             "items": normalized_items,
         }
 
         result.append(normalized)
 
     return result
-
 
 # ---------------------------------------------------------
 # Deduplication
@@ -553,7 +488,6 @@ def receipt_key(receipt):
         receipt.get("created"),
     )
 
-
 # ---------------------------------------------------------
 # Formatting
 # ---------------------------------------------------------
@@ -567,10 +501,8 @@ def format_money(value):
     except (ValueError, TypeError):
         return str(value)
 
-
 def get_shop_name(receipt):
     return receipt.get("nameTc") or receipt.get("title") or "—"
-
 
 # ---------------------------------------------------------
 # Receipt table
@@ -590,7 +522,6 @@ def print_receipts(receipts):
             receipt.get("created"),
             get_shop_name(receipt),
             format_money(receipt.get("amountPromo")),
-            receipt.get("paymentMethod") or "—",
             receipt.get("checkNum"),
             len(receipt.get("items", [])),
         ])
@@ -601,7 +532,6 @@ def print_receipts(receipts):
             "Дата",
             "Магазин",
             "Сумма",
-            "Способ оплаты",
             "№ чека",
             "Товаров",
         ],
@@ -617,7 +547,6 @@ def print_receipts(receipts):
             pass
 
     print(f"\nОбщая сумма покупок: {format_money(total)}")
-
 
 # ---------------------------------------------------------
 # Products table
@@ -664,7 +593,6 @@ def print_items(receipts):
         rows,
     )
 
-
 # ---------------------------------------------------------
 # CSV export
 # ---------------------------------------------------------
@@ -686,7 +614,6 @@ def export_csv(receipts, filename):
         "Адрес магазина",
         "Сумма чека",
         "Сумма без скидки",
-        "Способ оплаты",
         "ОФД",
         "PLU",
         "Название товара",
@@ -732,7 +659,6 @@ def export_csv(receipts, filename):
                         "Адрес магазина": receipt.get("storeAddress", ""),
                         "Сумма чека": receipt.get("amountPromo", ""),
                         "Сумма без скидки": receipt.get("amountRegular", ""),
-                        "Способ оплаты": receipt.get("paymentMethod", ""),
                         "ОФД": receipt.get("ofdurl", ""),
                         "PLU": item.get("pluId", ""),
                         "Название товара": item.get("name", ""),
@@ -754,7 +680,6 @@ def export_csv(receipts, filename):
     print(f"Экспортировано товаров: {count}")
     print(f"Чеков в экспорте: {len(receipts)}")
 
-
 # ---------------------------------------------------------
 # JSON export
 # ---------------------------------------------------------
@@ -771,11 +696,10 @@ def save_json(receipts, filename="receipts.json"):
         )
     except OSError as e:
         raise RuntimeError(
-            f"Не удалось сохранить JSON {filename}: {e}"
+            f"Не удалось сохранить JSON: {e}"
         )
 
     print(f"\nJSON сохранён → {filename}")
-
 
 # ---------------------------------------------------------
 # Raw response dump
@@ -795,313 +719,31 @@ def save_raw(raw, page):
 
     print(f"Сырой ответ → {filename}")
 
-
 # ---------------------------------------------------------
-# Main
+# Date parsing (ключ сортировки)
 # ---------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Загрузка истории покупок X5 Club.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Примеры использования:
-
-  Последние 30 дней:
-    python3 test_x5.py
-
-  История за январь:
-    python3 test_x5.py --from 2026-01-01 --to 2026-01-31
-
-  История за весь 2026 год:
-    python3 test_x5.py --from 2026-01-01 --to 2026-12-31
-
-  История с сохранением сырых ответов:
-    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --dump
-
-  Экспорт покупок в CSV:
-    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --csv
-
-  CSV с собственным именем:
-    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --csv purchases_2026.csv
-
-  Сохранить JSON:
-    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --json
-
-  JSON и CSV одновременно:
-    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --json --csv
-
-  Сырые ответы, JSON и CSV:
-    python3 test_x5.py --from 2026-01-01 --to 2026-11-30 --dump --csv
-
-  Использовать другой файл cookies:
-    python3 test_x5.py --cookie-file my_cookies.json
-
-Параметры:
-
-  --from       Начальная дата YYYY-MM-DD
-  --to         Конечная дата YYYY-MM-DD
-  --days       Количество последних дней (по умолчанию 30)
-  --cookie-file Файл cookies (по умолчанию cookies.json)
-  --json       Вывести результат в JSON
-  --dump       Сохранить сырые ответы и receipts.json
-  --csv        Экспортировать покупки в CSV
-               Если имя не указано, используется purchases.csv
-
-Формат CSV:
-  Кодировка UTF-8 с BOM.
-  Разделитель столбцов: точка с запятой.
-  Одна строка соответствует одному товару.
-"""
-    )
-
-    parser.add_argument(
-        "--from",
-        dest="date_from",
-        help="Начальная дата YYYY-MM-DD",
-    )
-
-    parser.add_argument(
-        "--to",
-        dest="date_to",
-        help="Конечная дата YYYY-MM-DD",
-    )
-
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=30,
-        help="Количество последних дней (по умолчанию 30)",
-    )
-
-    parser.add_argument(
-        "--cookie-file",
-        default="cookies.json",
-        help="Файл с cookies (по умолчанию cookies.json)",
-    )
-
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Вывести чеки в формате JSON",
-    )
-
-    parser.add_argument(
-        "--dump",
-        action="store_true",
-        help="Сохранить сырые ответы сервера и receipts.json",
-    )
-
-    parser.add_argument(
-        "--csv",
-        nargs="?",
-        const="purchases.csv",
-        default=None,
-        metavar="FILE",
-        help="Экспорт покупок в CSV (по умолчанию purchases.csv)",
-    )
-
-    args = parser.parse_args()
-
-    # -----------------------------------------------------
-    # Проверка дат
-    # -----------------------------------------------------
-
-    today = datetime.date.today()
-
-    try:
-        date_to = (
-            datetime.date.fromisoformat(args.date_to)
-            if args.date_to
-            else today
-        )
-
-        date_from = (
-            datetime.date.fromisoformat(args.date_from)
-            if args.date_from
-            else date_to - datetime.timedelta(days=args.days - 1)
-        )
-
-    except ValueError as e:
-        parser.error(
-            f"Некорректная дата: {e}. "
-            "Используй формат YYYY-MM-DD."
-        )
-
-    if args.days < 1:
-        parser.error("--days должен быть больше нуля.")
-
-    if date_from > date_to:
-        parser.error(
-            "Начальная дата не может быть позже конечной."
-        )
-
-    date_from_str = date_from.isoformat()
-    date_to_str = date_to.isoformat()
-
-    print("=" * 60)
-    print("X5 CLUB — ИСТОРИЯ ПОКУПОК")
-    print("=" * 60)
-    print(f"Период: {date_from_str} → {date_to_str}")
-    print(f"Файл cookies: {args.cookie_file}")
-
-    # -----------------------------------------------------
-    # Cookies
-    # -----------------------------------------------------
-
-    print("\nПодключение к X5 Club...")
-
-    try:
-        cookie = get_cookie(args.cookie_file)
-
-    except Exception as e:
-        print(
-            f"\nОшибка cookies: {e}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # -----------------------------------------------------
-    # HTTP session
-    # -----------------------------------------------------
-
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    session.headers["Cookie"] = cookie
-
-    all_receipts = []
-    seen = set()
-
-    # -----------------------------------------------------
-    # Pagination
-    # -----------------------------------------------------
-
-    print("\nЗапрашиваю историю...")
-
-    try:
-        for page in range(1, 101):
-            print(f"\nЗагружаю страницу {page}...")
-
-            raw = fetch_raw(
-                session,
-                date_from_str,
-                date_to_str,
-                page=None if page == 1 else page,
-            )
-
-            if args.dump:
-                save_raw(raw, page)
-
-            receipts = extract_receipts(raw)
-
-            if not receipts:
-                print("Чеков на странице нет. Завершение.")
-                break
-
-            added = 0
-
-            for receipt in receipts:
-                key = receipt_key(receipt)
-
-                if key in seen:
-                    continue
-
-                seen.add(key)
-                all_receipts.append(receipt)
-                added += 1
-
-            print(
-                f"Страница {page}: "
-                f"получено {len(receipts)}, "
-                f"новых {added}"
-            )
-
-            if added == 0:
-                print(
-                    "Новых чеков нет. "
-                    "Вероятно, достигнут конец истории."
-                )
-                break
-
-        else:
-            print("Достигнут лимит в 100 страниц.")
-
-    except requests.RequestException as e:
-        print(f"\nОшибка HTTP: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    except Exception as e:
-        print(f"\nОшибка: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    finally:
-        session.close()
-
-    # -----------------------------------------------------
-    # Sorting
-    # -----------------------------------------------------
-
-    all_receipts.sort(
-        key=lambda x: str(x.get("created") or ""),
-        reverse=True,
-    )
-
-    print("\nПолучение истории завершено.")
-
-    # -----------------------------------------------------
-    # Output
-    # -----------------------------------------------------
-
-    if args.json:
-        print(
-            json.dumps(
-                all_receipts,
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-    else:
-        print_receipts(all_receipts)
-        print_items(all_receipts)
-
-    # -----------------------------------------------------
-    # JSON save
-    # -----------------------------------------------------
-
-    if args.dump:
-        try:
-            save_json(all_receipts)
-        except RuntimeError as e:
-            print(f"Ошибка сохранения: {e}", file=sys.stderr)
-
-    # -----------------------------------------------------
-    # CSV export
-    # -----------------------------------------------------
-
-    if args.csv:
-        try:
-            export_csv(all_receipts, args.csv)
-        except RuntimeError as e:
-            print(f"Ошибка CSV: {e}", file=sys.stderr)
-            sys.exit(1)
-
-    # -----------------------------------------------------
-    # Summary
-    # -----------------------------------------------------
-
-    total_items = sum(
-        len(receipt.get("items", []))
-        for receipt in all_receipts
-    )
-
-    print("\n" + "=" * 60)
-    print("ИТОГО")
-    print("=" * 60)
-    print(f"Чеков: {len(all_receipts)}")
-    print(f"Товаров: {total_items}")
-
-    print("\nГотово.")
-
-
-if __name__ == "__main__":
-    main()
+def created_timestamp(receipt):
+    """
+    Дата чека в epoch seconds для корректной сортировки.
+
+    created приходит строкой (например "12.11.2026 18:24"),
+    строковая сортировка ломает порядок на диапазоне
+    через несколько месяцев. Нераспознанные даты получают
+    -inf и уходят в конец списка (сортировка стабильная).
+    """
+
+    s = str(receipt.get("created") or "").strip()
+
+    if not s:
+        return float("-inf")
+
+    # Unix-время: секунды (10 цифр) или миллисекунды (13 цифр)
+    if s.isdigit():
+        if len(s) == 13:
+            return int(s) / 1000.0
+        if len(s) == 10:
+            return float(s)
+        return float("-inf")
+
+    # ISO: 2026-11-12T18:24:00, 202
