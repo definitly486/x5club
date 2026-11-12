@@ -36,12 +36,23 @@ object X5Api {
         .add("Pragma", "no-cache")
         .build()
 
+    // Existing preset-period API is kept unchanged.
     fun fetchReceipts(cookieHeader: String, days: Int = 30): List<Receipt> {
         require(days >= 1) { "Период должен быть больше нуля" }
-        require(cookieHeader.isNotBlank()) { "Отсутствуют cookies авторизации" }
-
         val dateTo = LocalDate.now()
         val dateFrom = dateTo.minusDays((days - 1).toLong())
+        return fetchReceipts(cookieHeader, dateFrom, dateTo)
+    }
+
+    // Fetch receipts for an explicit inclusive date range.
+    fun fetchReceipts(
+        cookieHeader: String,
+        dateFrom: LocalDate,
+        dateTo: LocalDate
+    ): List<Receipt> {
+        require(!dateFrom.isAfter(dateTo)) { "Начальная дата не может быть позже конечной" }
+        require(cookieHeader.isNotBlank()) { "Отсутствуют cookies авторизации" }
+
         val formatter = DateTimeFormatter.ISO_LOCAL_DATE
         val allReceipts = mutableListOf<Receipt>()
         val seen = mutableSetOf<String>()
