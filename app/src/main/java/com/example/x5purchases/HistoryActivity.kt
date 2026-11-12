@@ -38,6 +38,7 @@ class HistoryActivity : AppCompatActivity() {
     private var currentReceipts: List<Receipt> = emptyList()
     private var cookies: String = ""
     private var isLoading = false
+    private var ignoreInitialPeriodSelection = true
 
     // Соответствует string-array period_labels
     private val periodDays = intArrayOf(7, 30, 60, 90, 180)
@@ -67,8 +68,8 @@ class HistoryActivity : AppCompatActivity() {
         setupPeriodSpinner()
         setupButtons()
 
-        // По умолчанию — 30 дней (индекс 1)
-        spinnerPeriod.setSelection(1)
+        // По умолчанию — 30 дней (индекс 1). Начальное событие Spinner
+        // игнорируется, чтобы оно не перезаписало выбранный календарём диапазон.
         loadHistory(periodDays[1])
     }
 
@@ -77,6 +78,7 @@ class HistoryActivity : AppCompatActivity() {
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         spinnerPeriod.adapter = adapter
+        spinnerPeriod.setSelection(1, false)
 
         spinnerPeriod.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(
@@ -85,6 +87,10 @@ class HistoryActivity : AppCompatActivity() {
                 position: Int,
                 id: Long
             ) {
+                if (ignoreInitialPeriodSelection) {
+                    ignoreInitialPeriodSelection = false
+                    return
+                }
                 if (!isLoading) {
                     loadHistory(periodDays[position])
                 }
@@ -183,7 +189,9 @@ class HistoryActivity : AppCompatActivity() {
         btnExportCsv.isEnabled = false
         currentReceipts = emptyList()
         recycler.adapter = null
-        tvStatus.text = "Загружаю историю $periodDescription…"
+        val dateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+        val selectedRange = "${dateFrom.format(dateFormatter)} — ${dateTo.format(dateFormatter)}"
+        tvStatus.text = "Загружаю историю: $selectedRange ($periodDescription)…"
 
         lifecycleScope.launch {
             try {
@@ -193,7 +201,7 @@ class HistoryActivity : AppCompatActivity() {
                 currentReceipts = receipts
 
                 if (receipts.isEmpty()) {
-                    tvStatus.text = "Чеков не найдено $periodDescription"
+                    tvStatus.text = "Чеков не найдено: $selectedRange ($periodDescription)"
                 } else {
                     val total = receipts.sumOf { it.amountPromo ?: 0.0 }
                     val itemsCount = receipts.sumOf { it.items.size }
