@@ -279,11 +279,35 @@ def receipt_date(value):
 
 
 def receipt_payment_method(receipt):
-    """Возвращает только явно указанную маску способа оплаты."""
+    """Извлекает маску карты из paymentMethod или payments[].bin."""
     value = receipt.get("paymentMethod")
+
+    # В экспортируемом X5 JSON paymentMethod — это описание вида:
+    # "Безналичный расчет (************7961), 289.97 ₽", а не сама маска.
     if isinstance(value, dict):
-        value = value.get("maskedPan") or value.get("cardNumber") or value.get("value")
-    return str(value or "").strip()
+        candidates = (
+            value.get("maskedPan") or value.get("cardNumber")
+            or value.get("bin") or value.get("value") or ""
+        )
+        value = candidates
+
+    match = re.search(r"\*{4,}\s*\d{4}", str(value or ""))
+    if match:
+        return re.sub(r"\s+", "", match.group(0))
+
+    # Надёжный источник маски в чеках X5 — массив payments и поле bin.
+    payments = receipt.get("payments")
+    if isinstance(payments, list):
+        for payment in payments:
+            if not isinstance(payment, dict):
+                continue
+            for key in ("bin", "maskedPan", "cardNumber"):
+                candidate = str(payment.get(key) or "").strip()
+                match = re.search(r"\*{4,}\s*\d{4}", candidate)
+                if match:
+                    return re.sub(r"\s+", "", match.group(0))
+
+    return ""
 
 
 def create_receipt_transaction(root, receipt, bank, mapped):
