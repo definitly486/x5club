@@ -205,7 +205,7 @@ class HistoryActivity : AppCompatActivity() {
                 } else {
                     val total = receipts.sumOf { it.amountPromo ?: 0.0 }
                     val itemsCount = receipts.sumOf { it.items.size }
-                    tvStatus.text = "Чеков: ${receipts.size}  |  Товаров: $itemsCount  |  Сумма: %.2f ₽"
+                    tvStatus.text = "$selectedRange  |  Чеков: ${receipts.size}  |  Товаров: $itemsCount  |  Сумма: %.2f ₽"
                         .format(total)
                     recycler.adapter = ReceiptsAdapter(receipts)
                     btnExportCsv.isEnabled = true
