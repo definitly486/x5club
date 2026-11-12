@@ -30,6 +30,17 @@
             android:minHeight="48dp" />
 
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnDateRange"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minWidth="0dp"
+            android:text="@string/btn_date_range"
+            android:textAllCaps="false"
+            app:icon="@android:drawable/ic_menu_my_calendar"
+            app:iconPadding="4dp" />
+
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnLogout"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content"
