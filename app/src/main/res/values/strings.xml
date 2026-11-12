@@ -4,6 +4,7 @@
     <string name="btn_done">Я вошёл — загрузить покупки</string>
     <string name="loading">Загрузка…</string>
     <string name="period_label">Период:</string>
+    <string name="btn_date_range">Даты</string>
     <string name="btn_logout">Выйти</string>
     <string name="btn_export_csv">Экспорт в CSV</string>
     <string name="export_success">CSV сохранён:\n%s</string>
