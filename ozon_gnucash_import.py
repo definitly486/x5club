@@ -136,21 +136,32 @@ def product_accounts(accounts, parent_id):
         frontier.extend(a["id"] for a in descendants)
     return result
 
-def find_product_parent(accounts):
-    # Ищем именно Расходы:Пропитание:Продукты, а не одноимённый счёт в другом месте.
-    matches = [
+def find_category_parents(accounts):
+    """Находит корневые категории товаров: продукты и хозтовары."""
+    products = [
         a for a in accounts.values()
         if norm(a["name"]) == "продукты"
         and "расходы:пропитание:продукты" in norm(a["path"]).replace(" ", "")
     ]
-    if not matches:
-        matches = [
+    if not products:
+        products = [
             a for a in accounts.values()
             if norm(a["name"]) == "продукты" and "пропитание" in norm(a["path"])
         ]
-    if len(matches) != 1:
+    if len(products) != 1:
         raise ValueError("Не удалось однозначно найти счёт Расходы → Пропитание → Продукты.")
-    return matches[0]
+
+    household = [
+        a for a in accounts.values()
+        if norm(a["name"]) == "хозтовары"
+        and "расходы" in norm(a["path"]).split()
+    ]
+    if len(household) != 1:
+        raise ValueError(
+            "Не удалось однозначно найти счёт Расходы → Хозтовары. "
+            f"Найдено: {len(household)}"
+        )
+    return products[0], household[0]
 
 ALIASES = {
     "мини сушки": "сушки",
@@ -435,10 +446,16 @@ class App:
             bank = find_account_by_path(
                 accounts, "Root Account:Активы:Текущие активы:ozon банк"
             )
-            parent = find_product_parent(accounts)
-            children = product_accounts(accounts, parent["id"])
+            parents = find_category_parents(accounts)
+            children = []
+            for parent in parents:
+                children.extend(product_accounts(accounts, parent["id"]))
+            # На случай общих/пересекающихся деревьев исключаем повторные GUID.
+            children = list({account["id"]: account for account in children}.values())
             self.log(f"Банковский счёт: {bank['path']}")
-            self.log(f"Счёт товаров: {parent['path']}")
+            self.log("Разделы для сопоставления товаров:")
+            for parent in parents:
+                self.log(f"  - {parent['path']}")
             self.log(f"Категорий для сопоставления: {len(children)}")
 
             selected = [r for r in receipts
