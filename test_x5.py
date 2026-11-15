@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 
 import os
@@ -9,6 +10,7 @@ import datetime
 from pathlib import Path
 
 import requests
+
 
 BASE_URL = "https://x5club.ru/lk/history.data"
 
@@ -29,6 +31,7 @@ HEADERS = {
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
 }
+
 
 # ---------------------------------------------------------
 # Таблицы
@@ -65,10 +68,12 @@ def print_table(headers, rows):
 
     def print_row(row):
         print(
-            "| " + " | ".join(
+            "| "
+            + " | ".join(
                 str(value).ljust(widths[i])
                 for i, value in enumerate(row)
-            ) + " |"
+            )
+            + " |"
         )
 
     print(separator)
@@ -79,6 +84,7 @@ def print_table(headers, rows):
         print_row(row)
 
     print(separator)
+
 
 # ---------------------------------------------------------
 # Cookies
@@ -196,6 +202,7 @@ def get_cookie(cookie_file):
 
     return cookie_header
 
+
 # ---------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------
@@ -263,6 +270,7 @@ def fetch_raw(session, date_from, date_to, page=None):
         )
 
     return raw
+
 
 # ---------------------------------------------------------
 # Turbo Stream decoder
@@ -390,6 +398,7 @@ def decode_turbo_stream(raw):
 
     return receipts
 
+
 # ---------------------------------------------------------
 # Receipt extraction
 # ---------------------------------------------------------
@@ -411,8 +420,59 @@ def find_items(receipt):
 
     return []
 
+
+def normalize_payments(receipt):
+    """Извлекает способы оплаты из массива payments."""
+
+    payments = receipt.get("payments")
+    if not isinstance(payments, list):
+        return []
+
+    result = []
+
+    for payment in payments:
+        if not isinstance(payment, dict):
+            continue
+
+        result.append({
+            "code": payment.get("code"),
+            "name": payment.get("name"),
+            "value": payment.get("value"),
+            "bin": payment.get("bin"),
+            "fps": payment.get("fps"),
+        })
+
+    return result
+
+
+def format_payment(payments):
+    """Формирует читаемое описание способов оплаты."""
+
+    if not payments:
+        return "—"
+
+    descriptions = []
+
+    for payment in payments:
+        name = payment.get("name") or "Способ оплаты не указан"
+        card = payment.get("bin")
+        value = payment.get("value")
+
+        description = str(name)
+
+        if card:
+            description += f" ({card})"
+
+        if value not in (None, ""):
+            description += f", {format_money(value)}"
+
+        descriptions.append(description)
+
+    return "; ".join(descriptions)
+
+
 def extract_receipts(raw):
-    """Извлекает чеки и товары из ответа сервера."""
+    """Извлекает чеки, способы оплаты и товары из ответа сервера."""
 
     decoded = decode_turbo_stream(raw)
 
@@ -456,6 +516,8 @@ def extract_receipts(raw):
                 "priceItem": item.get("priceItem"),
             })
 
+        normalized_payments = normalize_payments(receipt)
+
         normalized = {
             "rtlTxnId": receipt.get("rtlTxnId"),
             "created": receipt.get("created"),
@@ -468,12 +530,15 @@ def extract_receipts(raw):
             "fiscalSignNum": receipt.get("fiscalSignNum"),
             "storeAddress": receipt.get("storeAddress"),
             "ofdurl": receipt.get("ofdurl"),
+            "payments": normalized_payments,
+            "paymentMethod": format_payment(normalized_payments),
             "items": normalized_items,
         }
 
         result.append(normalized)
 
     return result
+
 
 # ---------------------------------------------------------
 # Deduplication
@@ -488,6 +553,7 @@ def receipt_key(receipt):
         receipt.get("created"),
     )
 
+
 # ---------------------------------------------------------
 # Formatting
 # ---------------------------------------------------------
@@ -501,8 +567,10 @@ def format_money(value):
     except (ValueError, TypeError):
         return str(value)
 
+
 def get_shop_name(receipt):
     return receipt.get("nameTc") or receipt.get("title") or "—"
+
 
 # ---------------------------------------------------------
 # Receipt table
@@ -522,6 +590,7 @@ def print_receipts(receipts):
             receipt.get("created"),
             get_shop_name(receipt),
             format_money(receipt.get("amountPromo")),
+            receipt.get("paymentMethod") or "—",
             receipt.get("checkNum"),
             len(receipt.get("items", [])),
         ])
@@ -532,6 +601,7 @@ def print_receipts(receipts):
             "Дата",
             "Магазин",
             "Сумма",
+            "Способ оплаты",
             "№ чека",
             "Товаров",
         ],
@@ -547,6 +617,7 @@ def print_receipts(receipts):
             pass
 
     print(f"\nОбщая сумма покупок: {format_money(total)}")
+
 
 # ---------------------------------------------------------
 # Products table
@@ -593,6 +664,7 @@ def print_items(receipts):
         rows,
     )
 
+
 # ---------------------------------------------------------
 # CSV export
 # ---------------------------------------------------------
@@ -614,6 +686,7 @@ def export_csv(receipts, filename):
         "Адрес магазина",
         "Сумма чека",
         "Сумма без скидки",
+        "Способ оплаты",
         "ОФД",
         "PLU",
         "Название товара",
@@ -659,6 +732,7 @@ def export_csv(receipts, filename):
                         "Адрес магазина": receipt.get("storeAddress", ""),
                         "Сумма чека": receipt.get("amountPromo", ""),
                         "Сумма без скидки": receipt.get("amountRegular", ""),
+                        "Способ оплаты": receipt.get("paymentMethod", ""),
                         "ОФД": receipt.get("ofdurl", ""),
                         "PLU": item.get("pluId", ""),
                         "Название товара": item.get("name", ""),
@@ -680,6 +754,7 @@ def export_csv(receipts, filename):
     print(f"Экспортировано товаров: {count}")
     print(f"Чеков в экспорте: {len(receipts)}")
 
+
 # ---------------------------------------------------------
 # JSON export
 # ---------------------------------------------------------
@@ -696,10 +771,11 @@ def save_json(receipts, filename="receipts.json"):
         )
     except OSError as e:
         raise RuntimeError(
-            f"Не удалось сохранить JSON: {e}"
+            f"Не удалось сохранить JSON {filename}: {e}"
         )
 
     print(f"\nJSON сохранён → {filename}")
+
 
 # ---------------------------------------------------------
 # Raw response dump
@@ -718,47 +794,6 @@ def save_raw(raw, page):
     )
 
     print(f"Сырой ответ → {filename}")
-
-# ---------------------------------------------------------
-# Date parsing (ключ сортировки)
-# ---------------------------------------------------------
-
-def created_timestamp(receipt):
-    """Преобразует дату чека в timestamp для правильной сортировки."""
-    value = str(receipt.get("created") or "").strip()
-    if not value:
-        return float("-inf")
-
-    if value.isdigit():
-        try:
-            number = int(value)
-            if len(value) == 13:
-                return number / 1000.0
-            if len(value) == 10:
-                return float(number)
-        except ValueError:
-            pass
-        return float("-inf")
-
-    formats = (
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M",
-        "%Y-%m-%d %H:%M",
-        "%d.%m.%Y %H:%M:%S",
-        "%d.%m.%Y %H:%M",
-        "%d.%m.%Y",
-    )
-    for fmt in formats:
-        try:
-            return datetime.datetime.strptime(value, fmt).timestamp()
-        except ValueError:
-            continue
-
-    try:
-        return datetime.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return float("-inf")
 
 
 # ---------------------------------------------------------
@@ -1007,7 +1042,7 @@ def main():
     # -----------------------------------------------------
 
     all_receipts.sort(
-        key=created_timestamp,
+        key=lambda x: str(x.get("created") or ""),
         reverse=True,
     )
 
