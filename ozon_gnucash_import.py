@@ -291,34 +291,39 @@ def receipt_date(value):
 
 
 def receipt_payment_method(receipt):
-    """Извлекает маску карты из paymentMethod или payments[].bin."""
-    value = receipt.get("paymentMethod")
-
-    # В экспортируемом X5 JSON paymentMethod — это описание вида:
-    # "Безналичный расчет (************7961), 289.97 ₽", а не сама маска.
-    if isinstance(value, dict):
-        candidates = (
-            value.get("maskedPan") or value.get("cardNumber")
-            or value.get("bin") or value.get("value") or ""
-        )
-        value = candidates
-
-    match = re.search(r"\*{4,}\s*\d{4}", str(value or ""))
-    if match:
-        return re.sub(r"\s+", "", match.group(0))
-
-    # Надёжный источник маски в чеках X5 — массив payments и поле bin.
+    """Возвращает маску карты; приоритетный источник — payments[].bin."""
+    # В X5 именно payments[].bin содержит маску карты, по которой
+    # определяется счёт списания в GnuCash.
     payments = receipt.get("payments")
     if isinstance(payments, list):
         for payment in payments:
             if not isinstance(payment, dict):
                 continue
-            for key in ("bin", "maskedPan", "cardNumber"):
-                candidate = str(payment.get(key) or "").strip()
-                match = re.search(r"\*{4,}\s*\d{4}", candidate)
+            candidate = str(payment.get("bin") or "").strip()
+            match = re.search(r"\*{4,}\s*\d{4}", candidate)
+            if match:
+                return re.sub(r"\s+", "", match.group(0))
+
+    # Совместимость со старыми JSON, где маска присутствует только
+    # в paymentMethod или альтернативных полях платежа.
+    value = receipt.get("paymentMethod")
+    if isinstance(value, dict):
+        value = (
+            value.get("maskedPan") or value.get("cardNumber")
+            or value.get("bin") or value.get("value") or ""
+        )
+    match = re.search(r"\*{4,}\s*\d{4}", str(value or ""))
+    if match:
+        return re.sub(r"\s+", "", match.group(0))
+
+    if isinstance(payments, list):
+        for payment in payments:
+            if not isinstance(payment, dict):
+                continue
+            for key in ("maskedPan", "cardNumber"):
+                match = re.search(r"\*{4,}\s*\d{4}", str(payment.get(key) or ""))
                 if match:
                     return re.sub(r"\s+", "", match.group(0))
-
     return ""
 
 
@@ -380,9 +385,6 @@ class App:
         self.json_path = tk.StringVar()
         self.status = tk.StringVar(value="Выберите файл GnuCash и файл с чеками.")
         self.analysis = None
-        self.ozon_enabled = tk.BooleanVar(value=True)
-        self.psb_enabled = tk.BooleanVar(value=False)
-        self.sber_enabled = tk.BooleanVar(value=False)
         self.build_ui()
 
     def build_ui(self):
@@ -394,14 +396,9 @@ class App:
         ttk.Label(outer, text="Файл чеков JSON:").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Entry(outer, textvariable=self.json_path).grid(row=1, column=1, sticky="ew", padx=6)
         ttk.Button(outer, text="Обзор…", command=self.pick_json).grid(row=1, column=2)
-        cards = ttk.LabelFrame(outer, text="Способы оплаты", padding=6)
-        cards.grid(row=2, column=0, columnspan=3, sticky="ew", pady=6)
-        ttk.Checkbutton(cards, text="Карта Озон", variable=self.ozon_enabled).pack(side="left", padx=8)
-        ttk.Checkbutton(cards, text="Карта ПСБ", variable=self.psb_enabled, state="disabled").pack(side="left", padx=8)
-        ttk.Checkbutton(cards, text="Карта Сбербанка", variable=self.sber_enabled, state="disabled").pack(side="left", padx=8)
-        ttk.Button(outer, text="Проверить и найти чеки", command=self.analyze).grid(row=3, column=0, columnspan=3, sticky="ew", pady=8)
+        ttk.Button(outer, text="Проверить и найти чеки", command=self.analyze).grid(row=2, column=0, columnspan=3, sticky="ew", pady=8)
         self.info = tk.Text(outer, height=8, wrap="word")
-        self.info.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
+        self.info.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=5)
         cols = ("item", "account", "amount")
         self.table = ttk.Treeview(outer, columns=cols, show="headings", height=14)
         self.table.heading("item", text="Товар из чека")
@@ -410,13 +407,13 @@ class App:
         self.table.column("item", width=470)
         self.table.column("account", width=300)
         self.table.column("amount", width=120, anchor="e")
-        self.table.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=5)
-        ttk.Label(outer, textvariable=self.status).grid(row=6, column=0, columnspan=3, sticky="w", pady=6)
+        self.table.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
+        ttk.Label(outer, textvariable=self.status).grid(row=5, column=0, columnspan=3, sticky="w", pady=6)
         self.save_btn = ttk.Button(outer, text="Создать проводки и сохранить GnuCash", command=self.save, state="disabled")
-        self.save_btn.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
+        self.save_btn.grid(row=6, column=0, columnspan=3, sticky="ew", pady=8)
         outer.columnconfigure(1, weight=1)
-        outer.rowconfigure(4, weight=0)
-        outer.rowconfigure(5, weight=1)
+        outer.rowconfigure(3, weight=0)
+        outer.rowconfigure(4, weight=1)
 
     def pick_gnucash(self):
         p = filedialog.askopenfilename(title="Выберите файл GnuCash", filetypes=[("GnuCash", "*.gnucash *.gnc"), ("Все файлы", "*")])
@@ -439,8 +436,6 @@ class App:
         self.save_btn.config(state="disabled")
         self.analysis = None
         try:
-            if not self.ozon_enabled.get():
-                raise ValueError("Для импорта чеков необходимо включить «Карта Озон».")
             root, compressed = read_gnucash(self.gnucash_path.get())
             receipts = load_receipts(self.json_path.get())
             accounts = account_data(root)
@@ -467,7 +462,7 @@ class App:
             if without_method:
                 self.log(f"Чеков без paymentMethod: {without_method} (они пропущены)")
             if not selected:
-                self.log("Подходящих чеков нет. Проверьте, что JSON содержит paymentMethod.")
+                self.log("Подходящих чеков нет. Проверьте payments[].bin в JSON.")
                 self.status.set("Нет чеков с точной маской карты Ozon. GnuCash не изменён.")
                 return
 
@@ -577,7 +572,6 @@ class App:
             f"Заполнить существующих незавершённых: {count_fill}\\n\\n"
             "Новые операции будут записаны в RUB со списанием с «ozon банк» "
             "и товарными расходами по категориям.\\n"
-            "ПСБ и Сбербанк не изменяются.\\n\\n"
             "Перед сохранением будет создана резервная копия .bak."
         )
         if not messagebox.askyesno("Подтверждение импорта", prompt):
