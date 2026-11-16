@@ -3,3 +3,10 @@ cookies.json
 *.csv
 receipts.json
 *.json
+json
+os
+sys
+csv
+*.log
+requests
+*.gnucash
