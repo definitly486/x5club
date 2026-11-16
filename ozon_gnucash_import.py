@@ -386,6 +386,16 @@ class App:
         self.status = tk.StringVar(value="Выберите файл GnuCash и файл с чеками.")
         self.analysis = None
         self.build_ui()
+        self.center_window()
+
+    def center_window(self):
+        """Размещает главное окно по центру экрана после расчёта его размеров."""
+        self.root.update_idletasks()
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+        x = max(0, (self.root.winfo_screenwidth() - width) // 2)
+        y = max(0, (self.root.winfo_screenheight() - height) // 2)
+        self.root.geometry(f"+{x}+{y}")
 
     def build_ui(self):
         outer = ttk.Frame(self.root, padding=12)
