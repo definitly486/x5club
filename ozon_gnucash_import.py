@@ -10,7 +10,10 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
+import threading
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -406,9 +409,11 @@ class App:
         ttk.Label(outer, text="Файл чеков JSON:").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Entry(outer, textvariable=self.json_path).grid(row=1, column=1, sticky="ew", padx=6)
         ttk.Button(outer, text="Обзор…", command=self.pick_json).grid(row=1, column=2)
-        ttk.Button(outer, text="Проверить и найти чеки", command=self.analyze).grid(row=2, column=0, columnspan=3, sticky="ew", pady=8)
+        self.fetch_btn = ttk.Button(outer, text="Загрузить чеки из X5 (--json)", command=self.fetch_x5)
+        self.fetch_btn.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 3))
+        ttk.Button(outer, text="Проверить и найти чеки", command=self.analyze).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(3, 8))
         self.info = tk.Text(outer, height=8, wrap="word")
-        self.info.grid(row=3, column=0, columnspan=3, sticky="nsew", pady=5)
+        self.info.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
         cols = ("item", "account", "amount")
         self.table = ttk.Treeview(outer, columns=cols, show="headings", height=14)
         self.table.heading("item", text="Товар из чека")
@@ -417,13 +422,76 @@ class App:
         self.table.column("item", width=470)
         self.table.column("account", width=300)
         self.table.column("amount", width=120, anchor="e")
-        self.table.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
-        ttk.Label(outer, textvariable=self.status).grid(row=5, column=0, columnspan=3, sticky="w", pady=6)
+        self.table.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=5)
+        ttk.Label(outer, textvariable=self.status).grid(row=6, column=0, columnspan=3, sticky="w", pady=6)
         self.save_btn = ttk.Button(outer, text="Создать проводки и сохранить GnuCash", command=self.save, state="disabled")
-        self.save_btn.grid(row=6, column=0, columnspan=3, sticky="ew", pady=8)
+        self.save_btn.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(3, weight=0)
-        outer.rowconfigure(4, weight=1)
+        outer.rowconfigure(5, weight=1)
+
+    def fetch_x5(self):
+        """Запускает test_x5.py --json в отдельном потоке, не блокируя окно."""
+        script = Path(__file__).resolve().with_name("test_x5.py")
+        if not script.is_file():
+            messagebox.showerror("Ошибка", f"Не найден файл скрипта:\n{script}")
+            return
+        self.fetch_btn.config(state="disabled")
+        self.status.set("Загрузка чеков из X5 Club...")
+        self.log("Запуск test_x5.py --json ...")
+        threading.Thread(
+            target=self._fetch_x5_worker,
+            args=(script,),
+            daemon=True,
+        ).start()
+
+    def _fetch_x5_worker(self, script):
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script), "--json"],
+                cwd=str(script.parent),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=900,
+            )
+            if result.returncode != 0:
+                details = (result.stderr or result.stdout or "Нет подробностей об ошибке.").strip()
+                raise RuntimeError(details[-6000:])
+            marker = "Получение истории завершено."
+            marker_pos = result.stdout.rfind(marker)
+            if marker_pos < 0:
+                raise RuntimeError("Скрипт завершился без сообщения об окончании загрузки.")
+            json_start = result.stdout.find("[", marker_pos + len(marker))
+            if json_start < 0:
+                raise RuntimeError("В выводе test_x5.py не найден JSON-массив чеков.")
+            receipts, _ = json.JSONDecoder().raw_decode(result.stdout[json_start:])
+            if not isinstance(receipts, list):
+                raise RuntimeError("test_x5.py вернул данные не в виде списка чеков.")
+            fd, output_path = tempfile.mkstemp(prefix="x5_receipts_", suffix=".json")
+            os.close(fd)
+            Path(output_path).write_text(
+                json.dumps(receipts, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.root.after(0, self._fetch_x5_done, output_path, len(receipts), None)
+        except Exception as exc:
+            self.root.after(0, self._fetch_x5_done, None, 0, str(exc))
+
+    def _fetch_x5_done(self, output_path, count, error):
+        self.fetch_btn.config(state="normal")
+        if error:
+            self.log("Ошибка загрузки X5:")
+            self.log(error)
+            self.status.set("Не удалось загрузить чеки из X5 Club.")
+            messagebox.showerror("Ошибка загрузки X5", error)
+            return
+        self.json_path.set(output_path)
+        self.log(f"Загрузка завершена: получено чеков — {count}.")
+        self.log(f"JSON сохранён во временный файл: {output_path}")
+        self.status.set(f"Из X5 Club загружено чеков: {count}. Запускаю проверку...")
+        self.analyze()
 
     def pick_gnucash(self):
         p = filedialog.askopenfilename(title="Выберите файл GnuCash", filetypes=[("GnuCash", "*.gnucash *.gnc"), ("Все файлы", "*")])
