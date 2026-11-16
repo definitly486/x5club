@@ -411,9 +411,10 @@ class App:
         ttk.Button(outer, text="Обзор…", command=self.pick_json).grid(row=1, column=2)
         self.fetch_btn = ttk.Button(outer, text="Загрузить чеки из X5 (--json)", command=self.fetch_x5)
         self.fetch_btn.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(8, 3))
-        ttk.Button(outer, text="Проверить и найти чеки", command=self.analyze).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(3, 8))
+        ttk.Button(outer, text="Проверить чеки X5", command=self.analyze).grid(row=3, column=0, columnspan=3, sticky="ew", pady=(3, 2))
+        ttk.Button(outer, text="Подготовить импорт в GnuCash", command=self.analyze_gnucash).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(2, 8))
         self.info = tk.Text(outer, height=8, wrap="word")
-        self.info.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=5)
+        self.info.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=5)
         cols = ("item", "account", "amount")
         self.table = ttk.Treeview(outer, columns=cols, show="headings", height=14)
         self.table.heading("item", text="Товар из чека")
@@ -422,13 +423,13 @@ class App:
         self.table.column("item", width=470)
         self.table.column("account", width=300)
         self.table.column("amount", width=120, anchor="e")
-        self.table.grid(row=5, column=0, columnspan=3, sticky="nsew", pady=5)
-        ttk.Label(outer, textvariable=self.status).grid(row=6, column=0, columnspan=3, sticky="w", pady=6)
+        self.table.grid(row=6, column=0, columnspan=3, sticky="nsew", pady=5)
+        ttk.Label(outer, textvariable=self.status).grid(row=7, column=0, columnspan=3, sticky="w", pady=6)
         self.save_btn = ttk.Button(outer, text="Создать проводки и сохранить GnuCash", command=self.save, state="disabled")
-        self.save_btn.grid(row=7, column=0, columnspan=3, sticky="ew", pady=8)
+        self.save_btn.grid(row=8, column=0, columnspan=3, sticky="ew", pady=8)
         outer.columnconfigure(1, weight=1)
-        outer.rowconfigure(3, weight=0)
-        outer.rowconfigure(5, weight=1)
+        outer.rowconfigure(5, weight=0)
+        outer.rowconfigure(6, weight=1)
 
     def fetch_x5(self):
         """Запускает test_x5.py --json в отдельном потоке, не блокируя окно."""
@@ -508,6 +509,126 @@ class App:
         self.info.see("end")
 
     def analyze(self):
+        """Проверяет JSON с чеками X5 без чтения или обращения к файлу GnuCash."""
+        self.info.delete("1.0", "end")
+        for row in self.table.get_children():
+            self.table.delete(row)
+        self.save_btn.config(state="disabled")
+        self.analysis = None
+        self.table.heading("account", text="Статус проверки")
+        try:
+            receipts = load_receipts(self.json_path.get())
+            if not receipts:
+                self.log("JSON загружен, но список чеков пуст.")
+                self.status.set("Проверка завершена: чеков нет.")
+                return
+
+            valid_count = 0
+            invalid_count = 0
+            self.log(f"Всего чеков в JSON: {len(receipts)}")
+            for index, receipt in enumerate(receipts, 1):
+                if not isinstance(receipt, dict):
+                    invalid_count += 1
+                    self.log(f"Запись #{index}: ошибка — данные чека имеют неверный формат.")
+                    self.table.insert("", "end", values=(f"Запись #{index}", "Ошибка: неверный формат", "—"))
+                    continue
+
+                errors = []
+                check_num = str(receipt.get("checkNum") or "").strip()
+                if not check_num:
+                    errors.append("нет номера чека")
+                try:
+                    day = receipt_date(receipt.get("created"))
+                except (TypeError, ValueError) as exc:
+                    day = "дата не распознана"
+                    errors.append(str(exc))
+
+                try:
+                    amount = cents(receipt.get("amountPromo", 0))
+                    if amount <= 0:
+                        errors.append("сумма чека должна быть больше нуля")
+                except Exception:
+                    amount = 0
+                    errors.append("некорректная сумма чека")
+
+                items = receipt.get("items")
+                if not isinstance(items, list) or not items:
+                    errors.append("нет списка товаров")
+                    items = []
+
+                items_total = 0
+                for item_index, item in enumerate(items, 1):
+                    if not isinstance(item, dict):
+                        errors.append(f"товар #{item_index}: неверный формат")
+                        self.table.insert("", "end", values=(
+                            f"Чек №{check_num or index}: товар #{item_index}",
+                            "Ошибка: неверный формат",
+                            "—",
+                        ))
+                        continue
+
+                    name = str(item.get("name") or "").strip()
+                    if not name:
+                        errors.append(f"товар #{item_index}: отсутствует название")
+                        name = f"Товар #{item_index}"
+
+                    raw_price = item.get("pricePromo")
+                    if raw_price in (None, ""):
+                        raw_price = item.get("priceRegular")
+                    try:
+                        item_amount = cents(raw_price)
+                        if item_amount < 0:
+                            raise ValueError("отрицательная цена")
+                        items_total += item_amount
+                        price_text = f"{Decimal(item_amount) / 100:.2f}"
+                        item_status = "OK"
+                    except Exception:
+                        price_text = "—"
+                        item_status = "Ошибка: цена"
+                        errors.append(f"{name}: отсутствует или некорректна цена")
+
+                    self.table.insert("", "end", values=(
+                        f"Чек №{check_num or index}: {name}",
+                        item_status,
+                        price_text,
+                    ))
+
+                if items and amount > 0 and items_total != amount:
+                    errors.append(
+                        f"сумма товаров {Decimal(items_total) / 100:.2f} "
+                        f"не равна сумме чека {Decimal(amount) / 100:.2f} RUB"
+                    )
+
+                if errors:
+                    invalid_count += 1
+                    self.log(f"Чек №{check_num or index} ({day}): ОШИБКА")
+                    for error in errors:
+                        self.log(f"  - {error}")
+                else:
+                    valid_count += 1
+                    self.log(
+                        f"Чек №{check_num}: {day}, сумма "
+                        f"{Decimal(amount) / 100:.2f} RUB, товаров: {len(items)} — OK"
+                    )
+
+            self.log("")
+            self.log(f"Корректных чеков: {valid_count}; с ошибками: {invalid_count}.")
+            self.status.set(
+                f"Проверка завершена: корректных чеков — {valid_count}; с ошибками — {invalid_count}. "
+                "GnuCash не читался и не изменялся."
+            )
+        except Exception as exc:
+            self.log(f"Ошибка проверки JSON: {exc}")
+            messagebox.showerror("Ошибка проверки чеков X5", str(exc))
+            self.status.set("Не удалось проверить JSON с чеками.")
+
+    def analyze_gnucash(self):
+        """Готовит импорт; только этот отдельный шаг читает файл GnuCash."""
+        self.table.heading("account", text="Счёт GnuCash")
+        self._analyze_gnucash_impl()
+
+    def _analyze_gnucash_impl(self):
+
         self.info.delete("1.0", "end")
         for row in self.table.get_children():
             self.table.delete(row)
