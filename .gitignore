@@ -1,1 +1,4 @@
 cookies.json
+*.raw.txt
+*.csv
+receipts.json
