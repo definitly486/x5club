@@ -242,6 +242,34 @@ def get_cookie(cookie_file):
             "'имя<TAB>значение'."
         )
 
+    # requests/urllib3 передают HTTP-заголовки в latin-1.
+    # Cookie должны содержать корректные ASCII-значения; не пытаемся
+    # молча перекодировать или исправлять повреждённые токены.
+    for pair in pairs:
+        name, value = pair.split("=", 1)
+        try:
+            value.encode("latin-1")
+        except UnicodeEncodeError as e:
+            character = value[e.start]
+            raise ValueError(
+                f"Cookie '{name}' содержит символ, который нельзя "
+                f"передать в HTTP-заголовке (U+{ord(character):04X}). "
+                "Возможно, значение было сокращено при копировании. "
+                "Скопируй полное значение cookie из Firefox заново; "
+                "не используй многоточие вместо части токена."
+            )
+
+        if any(ord(character) > 127 for character in value):
+            character = next(
+                character for character in value if ord(character) > 127
+            )
+            raise ValueError(
+                f"Cookie '{name}' содержит не-ASCII символ "
+                f"(U+{ord(character):04X}). "
+                "Проверь, что значение скопировано полностью и без "
+                "многоточий или посторонних символов."
+            )
+
     print(f"\nЗагружено cookies: {len(pairs)}")
 
     return cookie_header
