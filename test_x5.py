@@ -89,6 +89,50 @@ def print_table(headers, rows):
 # Cookies
 # ---------------------------------------------------------
 
+def parse_firefox_cookie_text(content):
+    """
+    Разбирает скопированный из Firefox список:
+        cookie_name<TAB>"cookie value"
+
+    Также принимает строки с пробелом вместо табуляции.
+    Значения могут быть заключены в одинарные или двойные кавычки.
+    """
+    cookies = {}
+
+    for line_number, line in enumerate(content.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if "\t" in line:
+            name, value = line.split("\t", 1)
+        else:
+            # Резервный вариант для копирования из таблицы без TAB.
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            name, value = parts
+
+        name = name.strip()
+        value = value.strip()
+
+        if not name:
+            continue
+
+        # Firefox может обрамлять значение кавычками.
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+
+        # Не принимаем заголовок таблицы как cookie.
+        if name.lower() in ("name", "имя", "cookie", "cookie name"):
+            continue
+
+        if value:
+            cookies[name] = value
+
+    return cookies
+
+
 def get_cookie(cookie_file):
     cookie_header = os.environ.get("X5_COOKIE", "").strip()
 
@@ -104,7 +148,7 @@ def get_cookie(cookie_file):
         )
 
     try:
-        content = path.read_text(encoding="utf-8").strip()
+        content = path.read_text(encoding="utf-8-sig").strip()
     except OSError as e:
         raise ValueError(
             f"Не удалось прочитать {cookie_file}: {e}"
@@ -115,28 +159,28 @@ def get_cookie(cookie_file):
             f"Файл {cookie_file} не содержит куки (файл пуст)."
         )
 
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as e:
-        raise ValueError(
-            f"Файл {cookie_file} содержит некорректный JSON: {e}"
-        )
-
     cookies = None
 
-    if isinstance(data, dict):
-        cookies = data.get("Request Cookies")
+    try:
+        data = json.loads(content)
 
-        if cookies is None:
-            cookies = data.get("cookies")
+        if isinstance(data, dict):
+            cookies = data.get("Request Cookies")
 
-        if cookies is None and data and all(
-            isinstance(v, str) for v in data.values()
-        ):
+            if cookies is None:
+                cookies = data.get("cookies")
+
+            if cookies is None and data and all(
+                isinstance(v, str) for v in data.values()
+            ):
+                cookies = data
+
+        elif isinstance(data, list):
             cookies = data
 
-    elif isinstance(data, list):
-        cookies = data
+    except json.JSONDecodeError:
+        # Помимо JSON поддерживаем прямую вставку таблицы Firefox.
+        cookies = parse_firefox_cookie_text(content)
 
     pairs = []
     cookie_rows = []
@@ -193,14 +237,14 @@ def get_cookie(cookie_file):
 
     if not cookie_header:
         raise ValueError(
-            f"Файл {cookie_file} не содержит куки. "
-            "Экспортируй cookies из браузера заново."
+            f"Файл {cookie_file} не содержит распознаваемых cookies. "
+            "Поддерживаются JSON и скопированный из Firefox формат "
+            "'имя<TAB>значение'."
         )
 
     print(f"\nЗагружено cookies: {len(pairs)}")
 
     return cookie_header
-
 
 # ---------------------------------------------------------
 # HTTP
