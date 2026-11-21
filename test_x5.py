@@ -945,10 +945,12 @@ def main():
         help="Количество последних дней (по умолчанию 30)",
     )
 
+    default_cookie_file = Path.home() / ".config" / "x5club" / "cookies.json"
+
     parser.add_argument(
         "--cookie-file",
-        default="cookies.json",
-        help="Файл с cookies (по умолчанию cookies.json)",
+        default=str(default_cookie_file),
+        help=f"Файл с cookies (по умолчанию {default_cookie_file})",
     )
 
     parser.add_argument(
@@ -973,6 +975,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Каталог конфигурации используется для cookies.json по умолчанию.
+    # Сам файл с cookies автоматически не создаём.
+    if args.cookie_file == str(default_cookie_file):
+        default_cookie_file.parent.mkdir(parents=True, exist_ok=True)
 
     # -----------------------------------------------------
     # Проверка дат
